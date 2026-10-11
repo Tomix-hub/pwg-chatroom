@@ -1,25 +1,45 @@
 const $ = (id) => document.getElementById(id);
 const home = $('home'), chat = $('chat'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');
-let socket, myName = '', roomCode = '';
-const savedDisplayName = localStorage.getItem('pwgChatName') || '';
+let socket, myName = '', roomCode = '', myProfile = null;
+let identity = localStorage.getItem('pwgChatIdentity');
+if (!identity) { identity = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }); localStorage.setItem('pwgChatIdentity', identity); }
 const savedRoomSession = (() => { try { return JSON.parse(localStorage.getItem('pwgChatSession') || 'null'); } catch { return null; } })();
 const inviteCode = (new URLSearchParams(location.search).get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 const hasInviteCode = /^[A-Z0-9]{6}$/.test(inviteCode);
-nameInput.value = savedDisplayName;
-if (hasInviteCode) codeInput.value = inviteCode;
+nameInput.readOnly = true; nameInput.placeholder = 'Wird mit deinem Profil gespeichert';
+async function api(url, options = {}) {
+  const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', 'X-PWG-Identity': identity, ...(options.headers || {}) } });
+  const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Die Anfrage ist fehlgeschlagen.'); return result;
+}
+function fillProfile(profile) {
+  myProfile = profile; myName = profile.name; nameInput.value = myName; localStorage.setItem('pwgChatName', myName);
+  $('profileName').textContent = profile.name; $('profileAvatar').textContent = profile.name.trim().charAt(0).toLocaleUpperCase();
+}
+async function loadProfile() {
+  try { const data = await api('/api/profile'); fillProfile(data.profile); }
+  catch { $('setupOverlay').classList.remove('hidden'); $('setupName').focus(); }
+}
+$('setupForm').addEventListener('submit', async event => {
+  event.preventDefault(); const input = $('setupName'), output = $('setupError'); output.textContent = '';
+  try { const data = await api('/api/register', { method: 'POST', body: JSON.stringify({ identity, name: input.value.trim() }) }); fillProfile(data.profile); $('setupOverlay').classList.add('hidden');
+    if (hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
+    else if (savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
+  } catch (err) { output.textContent = err.message; input.focus(); }
+});
+$('profileButton').addEventListener('click', () => $('profileOverlay').classList.remove('hidden'));
+$('closeProfile').addEventListener('click', () => $('profileOverlay').classList.add('hidden'));
+$('profileOverlay').addEventListener('click', event => { if (event.target === $('profileOverlay')) $('profileOverlay').classList.add('hidden'); });
 function connect(action) {
-  error.textContent = '';
-  myName = nameInput.value.trim();
-  if (!myName) { error.textContent = 'Bitte gib deinen Namen ein.'; nameInput.focus(); return; }
-  localStorage.setItem('pwgChatName', myName);
+  if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
+  error.textContent = ''; myName = myProfile.name;
   const roomName = roomNameInput.value.trim();
   if (action === 'create' && !roomName) { error.textContent = 'Bitte gib einen Raumnamen ein.'; roomNameInput.focus(); return; }
   roomCode = codeInput.value.trim().toUpperCase();
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(scheme + '//' + location.host);
   $('connection').classList.remove('offline'); $('connection').innerHTML = '<i></i> verbindet…';
-  socket.addEventListener('open', () => socket.send(JSON.stringify({ type: action, name: myName, code: roomCode, roomName })));
-  socket.addEventListener('message', (event) => {
+  socket.addEventListener('open', () => socket.send(JSON.stringify({ type: action, identity, code: roomCode, roomName })));
+  socket.addEventListener('message', event => {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
@@ -35,25 +55,22 @@ function renderNotice(text) { const item = document.createElement('div'); item.c
 function renderMessage(msg) {
   const empty = $('messages').querySelector('.empty'); if (empty) empty.remove();
   const bubble = document.createElement('article'); bubble.className = 'bubble' + (msg.name === myName ? ' mine' : '');
-  const sender = document.createElement('span'); sender.className = 'sender'; sender.textContent = msg.name === myName ? 'Du' : msg.name;
-  bubble.append(sender);
+  const sender = document.createElement('span'); sender.className = 'sender'; sender.textContent = msg.name === myName ? 'Du' : msg.name; bubble.append(sender);
   if (msg.type === 'image') { const image = document.createElement('img'); image.className = 'message-image'; image.src = msg.image; image.alt = 'Bild von ' + msg.name; image.loading = 'lazy'; bubble.append(image); }
   else { const text = document.createElement('div'); text.className = 'text'; text.textContent = msg.text; bubble.append(text); }
-  const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  bubble.append(time); $('messages').append(bubble); scrollDown();
+  const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); bubble.append(time); $('messages').append(bubble); scrollDown();
 }
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
-function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ name: myName, code: roomCode })); }
+function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
 function leaveRoom() { clearRoomSession(); if (socket) socket.close(); chat.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; }
 $('create').addEventListener('click', () => connect('create'));
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Zeichen.'; codeInput.focus(); return; } connect('join'); });
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); error.textContent = ''; });
-nameInput.addEventListener('input', () => { error.textContent = ''; const value = nameInput.value.trim(); if (value) localStorage.setItem('pwgChatName', value); });
 roomNameInput.addEventListener('input', () => error.textContent = '');
-$('form').addEventListener('submit', (event) => { event.preventDefault(); const input = $('message'); const text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { socket.send(JSON.stringify({ type: 'message', text })); input.value = ''; input.focus(); } });
+$('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { socket.send(JSON.stringify({ type: 'message', text })); input.value = ''; input.focus(); } });
 $('imageButton').addEventListener('click', () => $('imageFile').click());
-$('imageFile').addEventListener('change', async (event) => {
+$('imageFile').addEventListener('change', async event => {
   const file = event.target.files[0]; if (!file) return;
   if (!file.type.startsWith('image/')) { renderNotice('Bitte wähle eine Bilddatei aus.'); event.target.value = ''; return; }
   if (file.size > 15 * 1024 * 1024) { renderNotice('Das Originalbild ist zu groß. Bitte wähle ein kleineres Bild.'); event.target.value = ''; return; }
@@ -69,30 +86,11 @@ async function compressImage(file) {
 }
 $('copy').addEventListener('click', async () => {
   const url = new URL(location.href); url.search = ''; url.searchParams.set('room', roomCode); url.hash = '';
-  const invite = { title: 'PWG Chatroom', text: 'Komm in meinen Chatraum. Öffne den Link und tritt mit deinem gespeicherten Namen bei:', url: url.toString() };
+  const invite = { title: 'PWG Chatroom', text: 'Komm in meinen Chatraum. Öffne den Link und tritt mit deinem Profil bei:', url: url.toString() };
   if (navigator.share) { try { await navigator.share(invite); } catch (err) { if (err.name !== 'AbortError') renderNotice('Der Einladungslink konnte nicht geteilt werden.'); } return; }
-  try { await navigator.clipboard.writeText(url.toString()); $('copy').innerHTML = 'Einladungslink kopiert ✓'; setTimeout(() => $('copy').innerHTML = 'Freunde einladen <span>↗</span>', 1800); }
+  try { await navigator.clipboard.writeText(url.toString()); $('copy').innerHTML = 'Link kopiert ✓'; setTimeout(() => $('copy').innerHTML = 'Link teilen <span>↗</span>', 1800); }
   catch { window.prompt('Teile diesen Einladungslink:', url.toString()); }
 });
-$('back').addEventListener('click', leaveRoom);
-$('leaveRoom').addEventListener('click', leaveRoom);
-function getFriends() { try { const friends = JSON.parse(localStorage.getItem('pwgChatFriends') || '[]'); return Array.isArray(friends) ? friends.filter(name => typeof name === 'string') : []; } catch { return []; } }
-function renderFriends() {
-  const list = $('friendList'); list.replaceChildren();
-  const friends = getFriends();
-  if (!friends.length) { const empty = document.createElement('small'); empty.className = 'privacy'; empty.textContent = 'Noch keine Freunde hinzugefügt.'; list.append(empty); return; }
-  friends.forEach((name, index) => { const row = document.createElement('div'); row.className = 'friend-row'; const label = document.createElement('span'); label.textContent = name; const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'join-button friend-remove'; remove.textContent = 'Entfernen'; remove.setAttribute('aria-label', name + ' entfernen'); remove.addEventListener('click', () => { const updated = getFriends(); updated.splice(index, 1); localStorage.setItem('pwgChatFriends', JSON.stringify(updated)); renderFriends(); }); row.append(label, remove); list.append(row); });
-}
-function addFriend() {
-  const name = $('friendName').value.trim().slice(0, 24); if (!name) return;
-  if (name.toLocaleLowerCase() === savedDisplayName.trim().toLocaleLowerCase()) { error.textContent = 'Das bist schon du.'; return; }
-  const friends = getFriends(); if (friends.some(friend => friend.toLocaleLowerCase() === name.toLocaleLowerCase())) { error.textContent = 'Dieser Name steht schon in deiner Freundesliste.'; return; }
-  if (friends.length >= 50) { error.textContent = 'Die Freundesliste ist voll.'; return; }
-  friends.push(name); localStorage.setItem('pwgChatFriends', JSON.stringify(friends)); $('friendName').value = ''; error.textContent = ''; renderFriends();
-}
-$('addFriend').addEventListener('click', addFriend);
-$('friendName').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addFriend(); } });
-renderFriends();
-if (hasInviteCode) { if (savedDisplayName) connect('join'); }
-else if (savedRoomSession?.name && savedRoomSession?.code) { nameInput.value = savedRoomSession.name; codeInput.value = savedRoomSession.code; connect('join'); }
-else if (savedDisplayName) nameInput.value = savedDisplayName;
+$('back').addEventListener('click', leaveRoom); $('leaveRoom').addEventListener('click', leaveRoom);
+if (hasInviteCode) codeInput.value = inviteCode;
+loadProfile().then(() => { if (myProfile && hasInviteCode) connect('join'); else if (myProfile && savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); } });

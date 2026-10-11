@@ -1,63 +1,104 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomInt, randomUUID } = require('node:crypto');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 3000);
+const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
 const rooms = new Map();
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
-const server = http.createServer((req, res) => {
-  const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+let database = { users: {}, names: {} };
+let hadStoredProfiles = false;
+try {
+  const previous = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  hadStoredProfiles = true;
+  for (const [identity, oldUser] of Object.entries(previous.users || {})) {
+    if (!oldUser || typeof oldUser !== 'object') continue;
+    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name }; database.names[normName(oldUser.name)] = identity; }
+  }
+} catch {}
+function saveDatabase() {
+  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+  const temp = DATA_FILE + '.tmp'; fs.writeFileSync(temp, JSON.stringify(database)); fs.renameSync(temp, DATA_FILE);
+}
+if (hadStoredProfiles) saveDatabase();
+function cleanName(value) { return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 24); }
+function normName(value) { return cleanName(value).toLocaleLowerCase('de'); }
+function publicUser(user) { return { name: user.name }; }
+function getUser(id) { return database.users[String(id || '')]; }
+function identityFrom(req, data) { return req.headers['x-pwg-identity'] || data?.identity || ''; }
+function send(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); }
+function readBody(req) { return new Promise((resolve, reject) => { let body = ''; req.on('data', part => { body += part; if (body.length > 16_000) { reject(new Error('too_large')); req.destroy(); } }); req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('invalid_json')); } }); }); }
+function userSummary(user) { return { profile: publicUser(user) }; }
+function broadcast(room, payload) { for (const client of room.clients) if (client.readyState === 1) client.send(JSON.stringify(payload)); }
+function addToHistory(room, message) {
+  room.history.push(message); room.historyBytes = (room.historyBytes || 0) + JSON.stringify(message).length;
+  while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname.startsWith('/api/')) {
+    let data = {};
+    try { if (req.method !== 'GET') data = await readBody(req); } catch (error) { return send(res, error.message === 'too_large' ? 413 : 400, { error: 'Ungültige Anfrage.' }); }
+    const id = identityFrom(req, data); let user = getUser(id);
+    if (req.method === 'POST' && url.pathname === '/api/register') {
+      const identity = String(data.identity || ''); const name = cleanName(data.name);
+      if (!/^[a-f0-9-]{36}$/i.test(identity)) return send(res, 400, { error: 'Die Geräte-ID ist ungültig. Bitte lade die Seite neu.' });
+      if (name.length < 2) return send(res, 400, { error: 'Der Name muss mindestens 2 Zeichen lang sein.' });
+      if (database.users[identity]) return send(res, 200, userSummary(database.users[identity]));
+      if (database.names[normName(name)]) return send(res, 409, { error: 'Dieser Name ist schon vergeben. Bitte wähle einen anderen Namen.' });
+      user = { identity, name }; database.users[identity] = user; database.names[normName(name)] = identity; saveDatabase(); return send(res, 201, userSummary(user));
+    }
+    if (!user) return send(res, 401, { error: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' });
+    if (req.method === 'GET' && url.pathname === '/api/profile') return send(res, 200, userSummary(user));
+    return send(res, 404, { error: 'Unbekannte Anfrage.' });
+  }
+  const pathname = decodeURIComponent(url.pathname);
   const name = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.join(__dirname, name);
   if (!file.startsWith(__dirname) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); return res.end('Not found'); }
-  res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
+  res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' });
   fs.createReadStream(file).pipe(res);
 });
+
 const wss = new WebSocketServer({ server, maxPayload: 800 * 1024 });
-function broadcast(room, payload) { for (const client of room.clients) if (client.readyState === 1) client.send(JSON.stringify(payload)); }
-function addToHistory(room, message) {
-  room.history.push(message);
-  room.historyBytes = (room.historyBytes || 0) + JSON.stringify(message).length;
-  while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) {
-    const removed = room.history.shift();
-    room.historyBytes -= JSON.stringify(removed).length;
-  }
-}
 wss.on('connection', (socket) => {
   let joined = null;
   socket.on('message', (raw) => {
     let data; try { data = JSON.parse(raw.toString()); } catch { return; }
-    if (data.type === 'join') {
-      const code = String(data.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-      const name = String(data.name || '').trim().slice(0, 24);
-      if (!/^[A-Z0-9]{6}$/.test(code) || !name) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode und Namen ein.' }));
-      if (!rooms.has(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Diesen Raum gibt es nicht. Prüfe den Code.' }));
-      joined = { code, name };
-      const room = rooms.get(code); room.clients.add(socket);
-      socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history }));
-      broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
-    } else if (data.type === 'create') {
-      const name = String(data.name || '').trim().slice(0, 24);
-      const roomName = String(data.roomName || '').trim().slice(0, 32);
-      if (!name) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib zuerst deinen Namen ein.' }));
-      if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
-      let code; do { code = Math.random().toString(36).slice(2, 8).toUpperCase(); } while (rooms.has(code));
-      rooms.set(code, { name: roomName, clients: new Set(), history: [], historyBytes: 0 });
-      joined = { code, name }; const room = rooms.get(code); room.clients.add(socket);
-      socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] }));
-      broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
+    if (data.type === 'join' || data.type === 'create') {
+      const user = getUser(data.identity);
+      if (!user) return socket.send(JSON.stringify({ type: 'error', message: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' }));
+      const name = user.name;
+      if (data.type === 'join') {
+        const code = String(data.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+        if (!/^[A-Z0-9]{6}$/.test(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode ein.' }));
+        if (!rooms.has(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Diesen Raum gibt es nicht. Prüfe den Code.' }));
+        joined = { code, identity: user.identity, name };
+        const room = rooms.get(code); room.clients.add(socket);
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history })); broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
+      } else {
+        const roomName = String(data.roomName || '').trim().slice(0, 32);
+        if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
+        let code; do { code = randomInt(0, 36 ** 6).toString(36).toUpperCase().padStart(6, '0'); } while (rooms.has(code));
+        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), history: [], historyBytes: 0 });
+        joined = { code, identity: user.identity, name }; const room = rooms.get(code); room.clients.add(socket);
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] })); broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
+      }
     } else if (data.type === 'message' && joined) {
       const text = String(data.text || '').trim().slice(0, 1000); if (!text) return;
       const room = rooms.get(joined.code); if (!room) return;
       const message = { type: 'message', name: joined.name, text, time: new Date().toISOString() };
-      addToHistory(room, message); broadcast(room, message);
+      room.history.push(message); room.historyBytes += JSON.stringify(message).length;
+      while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
+      broadcast(room, message);
     } else if (data.type === 'image' && joined) {
       const room = rooms.get(joined.code); if (!room) return;
       const image = String(data.image || '');
       if (image.length > 650000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) return socket.send(JSON.stringify({ type: 'imageError', message: 'Das Bild ist ungültig oder zu groß.' }));
-      const message = { type: 'image', name: joined.name, image, time: new Date().toISOString() };
-      addToHistory(room, message); broadcast(room, message);
+      const message = { type: 'image', name: joined.name, image, time: new Date().toISOString() }; addToHistory(room, message); broadcast(room, message);
     }
   });
   socket.on('close', () => { if (joined) { const room = rooms.get(joined.code); if (room) { room.clients.delete(socket); broadcast(room, { type: 'notice', text: joined.name + ' hat den Raum verlassen.' }); } } });
