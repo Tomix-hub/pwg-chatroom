@@ -77,3 +77,8 @@ function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
 const savedRoomSession = (() => { try { return JSON.parse(localStorage.getItem('pwgChatSession') || 'null'); } catch { return null; } })();
 if (savedRoomSession?.name && savedRoomSession?.code) { nameInput.value = savedRoomSession.name; codeInput.value = savedRoomSession.code; connect('join'); }
 $('leaveRoom')?.addEventListener('click', () => { clearRoomSession(); if (socket) socket.close(); chat.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = ''; });
+
+
+const savedDisplayName = localStorage.getItem('pwgChatName');
+if (!savedRoomSession && savedDisplayName) nameInput.value = savedDisplayName;
+nameInput.addEventListener('input', () => { const value = nameInput.value.trim(); if (value) localStorage.setItem('pwgChatName', value); });
