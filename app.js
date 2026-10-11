@@ -16,7 +16,7 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); updateConnection(true); }
+    if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
     if (data.type === 'message' || data.type === 'image') renderMessage(data);
     if (data.type === 'notice') renderNotice(data.text);
   });
@@ -69,3 +69,11 @@ async function compressImage(file) {
 }
 $('copy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(roomCode); $('copy').innerHTML = 'Kopiert ✓'; setTimeout(() => $('copy').innerHTML = 'Code teilen <span>↗</span>', 1600); } catch { window.prompt('Teile diesen Raumcode:', roomCode); } });
 $('back').addEventListener('click', () => { socket?.close(); chat.classList.add('hidden'); home.classList.remove('hidden'); $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; });
+
+
+// Raumdaten im Browser merken, damit ein Neuladen die Sitzung wiederherstellt.
+function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ name: myName, code: roomCode })); }
+function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
+const savedRoomSession = (() => { try { return JSON.parse(localStorage.getItem('pwgChatSession') || 'null'); } catch { return null; } })();
+if (savedRoomSession?.name && savedRoomSession?.code) { nameInput.value = savedRoomSession.name; codeInput.value = savedRoomSession.code; connect('join'); }
+$('leaveRoom')?.addEventListener('click', () => { clearRoomSession(); if (socket) socket.close(); chat.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = ''; });
