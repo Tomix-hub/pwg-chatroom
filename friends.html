@@ -10,7 +10,7 @@
     .friends-card{width:min(100%,680px);padding:clamp(22px,5vw,38px);background:#1b1a17;border:1px solid #39352c;border-radius:20px;box-shadow:0 18px 50px #0005}
     .friends-card h2{margin:14px 0 8px;color:#f7f1e3;font:700 clamp(34px,6vw,46px)/1.1 Manrope,Arial,sans-serif;letter-spacing:-1.6px}
     .friends-intro{margin:0 0 24px;color:#b3aa96;font-size:14px;line-height:1.65}
-    .friend-add-row{display:flex;gap:10px;align-items:center}
+    .friend-add-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
     .friend-add-row input{flex:1;min-width:0;height:48px;padding:0 14px;border:1px solid #3a372f;border-radius:10px;background:#141412;color:#f4f0e6;font:14px 'DM Sans',Arial,sans-serif}
     .friend-add-row input::placeholder{color:#837c6d}
     .friend-add-row .primary{width:auto;min-width:145px;height:48px;margin:0;padding:0 16px;border:0;border-radius:9px;font-weight:700;white-space:nowrap;justify-content:center;gap:8px}
@@ -26,8 +26,11 @@
     .invite-hint p{margin:7px 0 14px;color:#a69d89;font-size:12px;line-height:1.6}
     .friends-create-link{display:inline-flex;width:auto;height:auto;padding:10px 14px;border:1px solid #48402c;border-radius:9px;background:#29251b;color:#e2c574;text-decoration:none;font-size:12px}
     .friends-create-link:hover,.friends-nav:hover,.friend-remove:hover{background:#39311f}
-    @media(max-width:520px){.friends-page{padding:30px 0}.friends-card{padding:22px 17px}.friend-add-row{align-items:stretch;flex-direction:column}.friend-add-row input,.friend-add-row .primary{width:100%}.friend-remove{padding:8px;font-size:11px}}
-  </style>
+    @media(max-width:520px){.friends-page{padding:30px 0}.friends-card{padding:22px 17px}.friend-add-row{align-items:stretch;flex-direction:column}.friend-add-row input,.friend-add-row .primary{width:100%}.friend-remove{padding:8px;font-size:11px}}    .friend-add-row input{width:100%;flex:none}
+    .friend-add-row .primary{width:auto!important;flex:none}
+    .invite-hint .friends-create-link{width:auto!important;min-width:160px;justify-content:center;white-space:nowrap}
+    @media(max-width:520px){.friend-add-row{grid-template-columns:1fr}.friend-add-row input,.friend-add-row .primary{width:100%!important}}
+    </style>
 </head>
 <body>
   <main class="shell">
