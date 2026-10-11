@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#11110f">
+  <meta name="description" content="Verwalte deine Freundesliste im PWG Chatroom.">
+  <title>Freunde — PWG Chatroom</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="brand"><div class="brand-mark" aria-hidden="true">P<span>·</span></div><div><h1>PWG Chatroom</h1><p>by Tom Carthaus</p></div><a class="friends-nav" href="index.html">Zurück zum Chat</a></header>
+    <section class="friends-page">
+      <div class="friends-card">
+        <div class="eyebrow"><span></span> DEINE GRUPPE</div>
+        <h2>Freunde</h2>
+        <p class="friends-intro">Füge Freunde per Namen zu deiner Liste hinzu. Die Liste bleibt in diesem Browser gespeichert.</p>
+        <form id="friendForm" class="friend-add-row"><input id="friendName" maxlength="24" placeholder="Name deines Freundes" autocomplete="off" aria-label="Name deines Freundes"><button id="addFriend" class="primary" type="submit">Hinzufügen <span>＋</span></button></form>
+        <p id="friendError" class="error" role="alert"></p>
+        <div id="friendList" class="friend-list friends-page-list" aria-live="polite"></div>
+        <div class="invite-hint"><strong>Freunde in den Chat holen</strong><p>Erstelle einen Raum und tippe im Chat auf „Freunde einladen“, um deinen Einladungslink zu teilen.</p><a class="join-button friends-create-link" href="index.html">Zum Chatraum ↗</a></div>
+      </div>
+    </section>
+    <footer class="footer"><span>PWG CHATROOM</span><span>Gemacht für gemeinsame Momente <b>✳</b></span></footer>
+  </main>
+  <script src="friends.js"></script>
+</body></html>
