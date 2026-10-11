@@ -14,8 +14,16 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
   fs.createReadStream(file).pipe(res);
 });
-const wss = new WebSocketServer({ server, maxPayload: 4096 });
+const wss = new WebSocketServer({ server, maxPayload: 800 * 1024 });
 function broadcast(room, payload) { for (const client of room.clients) if (client.readyState === 1) client.send(JSON.stringify(payload)); }
+function addToHistory(room, message) {
+  room.history.push(message);
+  room.historyBytes = (room.historyBytes || 0) + JSON.stringify(message).length;
+  while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) {
+    const removed = room.history.shift();
+    room.historyBytes -= JSON.stringify(removed).length;
+  }
+}
 wss.on('connection', (socket) => {
   let joined = null;
   socket.on('message', (raw) => {
@@ -35,7 +43,7 @@ wss.on('connection', (socket) => {
       if (!name) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib zuerst deinen Namen ein.' }));
       if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
       let code; do { code = Math.random().toString(36).slice(2, 8).toUpperCase(); } while (rooms.has(code));
-      rooms.set(code, { name: roomName, clients: new Set(), history: [] });
+      rooms.set(code, { name: roomName, clients: new Set(), history: [], historyBytes: 0 });
       joined = { code, name }; const room = rooms.get(code); room.clients.add(socket);
       socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] }));
       broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
@@ -43,7 +51,13 @@ wss.on('connection', (socket) => {
       const text = String(data.text || '').trim().slice(0, 1000); if (!text) return;
       const room = rooms.get(joined.code); if (!room) return;
       const message = { type: 'message', name: joined.name, text, time: new Date().toISOString() };
-      room.history.push(message); if (room.history.length > 100) room.history.shift(); broadcast(room, message);
+      addToHistory(room, message); broadcast(room, message);
+    } else if (data.type === 'image' && joined) {
+      const room = rooms.get(joined.code); if (!room) return;
+      const image = String(data.image || '');
+      if (image.length > 650000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) return socket.send(JSON.stringify({ type: 'imageError', message: 'Das Bild ist ungültig oder zu groß.' }));
+      const message = { type: 'image', name: joined.name, image, time: new Date().toISOString() };
+      addToHistory(room, message); broadcast(room, message);
     }
   });
   socket.on('close', () => { if (joined) { const room = rooms.get(joined.code); if (room) { room.clients.delete(socket); broadcast(room, { type: 'notice', text: joined.name + ' hat den Raum verlassen.' }); } } });
