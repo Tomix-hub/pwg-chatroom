@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#f5f3ee">
+  <meta name="description" content="Ein gemeinsamer Chatraum für deine Freunde. Erstelle einen Raum oder tritt mit einem Code bei.">
+  <title>PWG Chatroom — by Tom Carthaus</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="brand"><div class="brand-mark" aria-hidden="true">P<span>·</span></div><div><h1>PWG Chatroom</h1><p>by Tom Carthaus</p></div><div class="online-pill"><i></i> Dein Chat, überall</div></header>
+    <section id="home" class="home-grid">
+      <div class="welcome"><div class="eyebrow"><span></span> EIN ORT FÜR EURE GRUPPE</div><h2>Zusammen<br>im Gespräch.</h2><p>Erstellt einen Raum, teilt den Code und schreibt los – auf dem iPad, Handy oder Computer.</p><div class="device-note"><span>↗</span> Funktioniert auf allen Geräten im Browser</div></div>
+      <div class="entry-card"><label class="field-label" for="name">DEIN NAME</label><input id="name" maxlength="24" placeholder="Wie sollen dich Freunde nennen?" autocomplete="nickname">
+        <button id="create" class="primary"><span>Raum erstellen</span><span class="arrow">↗</span></button>
+        <div class="divider"><span></span><small>ODER MIT CODE BEITRETEN</small><span></span></div>
+        <label class="field-label" for="code">RAUMCODE</label><div class="join-row"><input id="code" maxlength="6" placeholder="z. B. A7K2MP" autocomplete="off" autocapitalize="characters"><button id="join" class="join-button" aria-label="Raum beitreten">→</button></div>
+        <p id="error" class="error" role="alert"></p><p class="privacy">Wer den Code hat, kann dem Raum beitreten.</p>
+      </div>
+    </section>
+    <section id="chat" class="chat-card hidden" aria-label="Chatraum"><header class="chat-head"><button id="back" class="back" aria-label="Zurück">←</button><div class="room-icon">✳</div><div class="room-info"><div class="room-title">Euer Raum <span id="connection" class="connection"><i></i> verbindet…</span></div><div class="room-sub">CODE <strong id="roomCode"></strong></div></div><button id="copy" class="copy">Code teilen <span>↗</span></button></header>
+      <div id="messages" class="messages"><div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div></div>
+      <form id="form" class="composer"><input id="message" maxlength="1000" placeholder="Schreib eine Nachricht …" autocomplete="off" aria-label="Nachricht"><button aria-label="Nachricht senden">↑</button></form><div class="chat-foot">Nachrichten sind für alle im Raum sichtbar.</div>
+    </section>
+    <footer class="footer"><span>PWG CHATROOM</span><span>Gemacht für gemeinsame Momente <b>✳</b></span></footer>
+  </main><script src="app.js"></script>
+</body></html>
