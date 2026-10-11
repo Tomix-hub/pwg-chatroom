@@ -94,3 +94,17 @@ $('copy').addEventListener('click', async () => {
 $('back').addEventListener('click', leaveRoom); $('leaveRoom').addEventListener('click', leaveRoom);
 if (hasInviteCode) codeInput.value = inviteCode;
 loadProfile().then(() => { if (myProfile && hasInviteCode) connect('join'); else if (myProfile && savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); } });
+
+
+function setTheme(theme) {
+  const selected = ['gold', 'light', 'stone'].includes(theme) ? theme : 'gold';
+  document.body.dataset.theme = selected;
+  localStorage.setItem('pwgChatTheme', selected);
+  document.querySelectorAll('[data-theme-choice]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.themeChoice === selected));
+  });
+  const status = $('themeStatus');
+  if (status) status.textContent = 'Aktives Design: ' + ({ gold: 'Schwarz & Gold', light: 'Weiß & Schwarz', stone: 'Sandstein' }[selected]);
+}
+setTheme(localStorage.getItem('pwgChatTheme') || 'gold');
+document.querySelectorAll('[data-theme-choice]').forEach(button => button.addEventListener('click', () => setTheme(button.dataset.themeChoice)));
