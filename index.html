@@ -20,7 +20,7 @@
     </section>
     <section id="chat" class="chat-card hidden" aria-label="Chatraum"><header class="chat-head"><button id="back" class="back" aria-label="Zurück">←</button><div class="room-icon">✳</div><div class="room-info"><div class="room-title"><span id="roomTitle">Euer Raum</span> <span id="connection" class="connection"><i></i> verbindet…</span></div><div class="room-sub">CODE <strong id="roomCode"></strong></div></div><button id="copy" class="copy">Code teilen <span>↗</span></button></header>
       <div id="messages" class="messages"><div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div></div>
-      <form id="form" class="composer"><input id="message" maxlength="1000" placeholder="Schreib eine Nachricht …" autocomplete="off" aria-label="Nachricht"><button aria-label="Nachricht senden">↑</button></form><div class="chat-foot">Nachrichten sind für alle im Raum sichtbar.</div>
+      <form id="form" class="composer"><input id="imageFile" type="file" accept="image/*" hidden><button id="imageButton" type="button" class="image-button" aria-label="Bild senden" title="Bild senden">＋</button><input id="message" maxlength="1000" placeholder="Schreib eine Nachricht …" autocomplete="off" aria-label="Nachricht"><button aria-label="Nachricht senden">↑</button></form><div class="chat-foot">Nachrichten sind für alle im Raum sichtbar.</div>
     </section>
     <footer class="footer"><span>PWG CHATROOM</span><span>Gemacht für gemeinsame Momente <b>✳</b></span></footer>
   </main><script src="app.js"></script>
