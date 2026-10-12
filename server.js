@@ -14,14 +14,17 @@ let hadStoredProfiles = false;
 try {
   const previous = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
   hadStoredProfiles = true;
+  for (const [key, history] of Object.entries(previous.whispers || {})) {
+    if (/^[a-f0-9-]{36}:[a-f0-9-]{36}$/i.test(key) && Array.isArray(history)) whispers.set(key, history.filter(message => message && typeof message.text === 'string' && typeof message.fromIdentity === 'string').slice(-200));
+  }
   for (const [identity, oldUser] of Object.entries(previous.users || {})) {
     if (!oldUser || typeof oldUser !== 'object') continue;
-    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}) }; database.names[normName(oldUser.name)] = identity; }
+    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [] }; database.names[normName(oldUser.name)] = identity; }
   }
 } catch {}
 function saveDatabase() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  const temp = DATA_FILE + '.tmp'; fs.writeFileSync(temp, JSON.stringify(database)); fs.renameSync(temp, DATA_FILE);
+  const temp = DATA_FILE + '.tmp'; fs.writeFileSync(temp, JSON.stringify({ ...database, whispers: Object.fromEntries(whispers) })); fs.renameSync(temp, DATA_FILE);
 }
 if (hadStoredProfiles) saveDatabase();
 function cleanName(value) { return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 24); }
@@ -37,7 +40,27 @@ function addToHistory(room, message) {
   room.history.push(message); room.historyBytes = (room.historyBytes || 0) + JSON.stringify(message).length;
   while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
 }
-function whisperKey(code, a, b) { return code + ':' + [a, b].sort().join(':'); }
+function whisperKey(a, b) { return [a, b].sort().join(':'); }
+function rememberContact(identity, contactIdentity) {
+  if (identity === contactIdentity) return false;
+  const user = getUser(identity); if (!user) return false;
+  user.contacts ||= [];
+  const existing = user.contacts.indexOf(contactIdentity);
+  if (existing >= 0) user.contacts.splice(existing, 1);
+  user.contacts.push(contactIdentity); if (user.contacts.length > 100) user.contacts.shift();
+  return true;
+}
+function rememberRoomParticipants(room, identity) {
+  room.participants ||= new Set([...room.clients].map(client => client.joined?.identity).filter(Boolean));
+  let changed = false;
+  for (const previousIdentity of room.participants) {
+    if (previousIdentity === identity) continue;
+    changed = rememberContact(identity, previousIdentity) || changed;
+    changed = rememberContact(previousIdentity, identity) || changed;
+  }
+  room.participants.add(identity);
+  if (changed) saveDatabase();
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -51,10 +74,14 @@ const server = http.createServer(async (req, res) => {
       if (name.length < 2) return send(res, 400, { error: 'Der Name muss mindestens 2 Zeichen lang sein.' });
       if (database.users[identity]) return send(res, 200, userSummary(database.users[identity]));
       if (database.names[normName(name)]) return send(res, 409, { error: 'Dieser Name ist schon vergeben. Bitte wähle einen anderen Namen.' });
-      user = { identity, name }; database.users[identity] = user; database.names[normName(name)] = identity; saveDatabase(); return send(res, 201, userSummary(user));
+      user = { identity, name, contacts: [] }; database.users[identity] = user; database.names[normName(name)] = identity; saveDatabase(); return send(res, 201, userSummary(user));
     }
     if (!user) return send(res, 401, { error: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' });
     if (req.method === 'GET' && url.pathname === '/api/profile') return send(res, 200, userSummary(user));
+    if (req.method === 'GET' && url.pathname === '/api/contacts') {
+      const contacts = (user.contacts || []).map(contactId => getUser(contactId)).filter(Boolean).map(contact => ({ identity: contact.identity, ...publicUser(contact) }));
+      return send(res, 200, { contacts });
+    }
     if (req.method === 'POST' && url.pathname === '/api/profile/avatar') {
       const avatar = String(data.avatar || '');
       if (avatar.length > 140_000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(avatar)) return send(res, 400, { error: 'Das Profilbild ist ungültig oder zu groß.' });
@@ -117,36 +144,42 @@ wss.on('connection', (socket) => {
         if (!/^[0-9]{6}$/.test(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode ein.' }));
         if (!rooms.has(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Diesen Raum gibt es nicht. Prüfe den Code.' }));
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined;
-        const room = rooms.get(code); room.clients.add(socket);
+        const room = rooms.get(code); rememberRoomParticipants(room, user.identity); room.clients.add(socket);
         socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history })); broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
       } else {
         const roomName = String(data.roomName || '').trim().slice(0, 32);
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
         let code; do { code = randomInt(0, 1_000_000).toString().padStart(6, '0'); } while (rooms.has(code));
-        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
+        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined; const room = rooms.get(code); room.clients.add(socket);
         socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] })); broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
       }
-    } else if (data.type === 'whisperHistory' && joined) {
+    } else if (data.type === 'dmInbox' && !joined) {
+      const user = getUser(data.identity);
+      if (!user) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' }));
+      socket.inboxIdentity = user.identity;
+      socket.send(JSON.stringify({ type: 'inboxReady' }));
+    } else if (data.type === 'dmConnect' && !joined) {
+      const user = getUser(data.identity), withIdentity = String(data.withIdentity || '');
+      if (!user || !/^[a-f0-9-]{36}$/i.test(withIdentity) || !(user.contacts || []).includes(withIdentity)) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Dieser Flüsterkontakt ist nicht verfügbar.' }));
+      socket.directIdentity = user.identity; socket.dmWith = withIdentity;
+      socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity, messages: whispers.get(whisperKey(user.identity, withIdentity)) || [] }));
+    } else if (data.type === 'whisperHistory' && (joined || socket.directIdentity || socket.inboxIdentity)) {
       const withIdentity = String(data.withIdentity || '');
-      if (!/^[a-f0-9-]{36}$/i.test(withIdentity) || withIdentity === joined.identity) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Diesen privaten Chat kannst du nicht öffnen.' }));
-      const room = rooms.get(joined.code);
-      const partnerOnline = [...room.clients].some(client => client.readyState === 1 && client.joined?.identity === withIdentity);
-      if (!partnerOnline) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Die Person muss gerade mit dir im Raum sein.' }));
-      socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity, messages: whispers.get(whisperKey(joined.code, joined.identity, withIdentity)) || [] }));
-    } else if (data.type === 'whisper' && joined) {
+      const requester = joined?.identity || socket.directIdentity || socket.inboxIdentity;
+      if (!/^[a-f0-9-]{36}$/i.test(withIdentity) || withIdentity === requester || !(getUser(requester)?.contacts || []).includes(withIdentity) || (socket.directIdentity && socket.dmWith !== withIdentity)) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Diesen privaten Chat kannst du nicht öffnen.' }));
+      socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity, messages: whispers.get(whisperKey(requester, withIdentity)) || [] }));
+    } else if (data.type === 'whisper' && (joined || socket.directIdentity || socket.inboxIdentity)) {
       const toIdentity = String(data.toIdentity || ''), text = String(data.text || '').trim().slice(0, 1000);
-      if (!/^[a-f0-9-]{36}$/i.test(toIdentity) || toIdentity === joined.identity || !text) return;
-      const room = rooms.get(joined.code);
-      const recipients = [...room.clients].filter(client => client.readyState === 1 && client.joined?.identity === toIdentity);
-      if (!recipients.length) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Die Person ist nicht mehr in diesem Raum.' }));
-      const key = whisperKey(joined.code, joined.identity, toIdentity), history = whispers.get(key) || [];
-      const message = { id: randomUUID(), fromIdentity: joined.identity, name: joined.name, text, time: new Date().toISOString() };
-      history.push(message); if (history.length > 200) history.splice(0, history.length - 200); whispers.set(key, history);
-      for (const client of room.clients) {
+      const fromIdentity = joined?.identity || socket.directIdentity || socket.inboxIdentity, fromUser = getUser(fromIdentity);
+      if (!/^[a-f0-9-]{36}$/i.test(toIdentity) || toIdentity === fromIdentity || !text || !(fromUser?.contacts || []).includes(toIdentity) || (socket.directIdentity && socket.dmWith !== toIdentity)) return socket.send(JSON.stringify({ type: 'whisperError', message: 'An diese Person kannst du nicht flüstern.' }));
+      const key = whisperKey(fromIdentity, toIdentity), history = whispers.get(key) || [];
+      const message = { id: randomUUID(), fromIdentity, name: fromUser.name, text, time: new Date().toISOString() };
+      history.push(message); if (history.length > 200) history.splice(0, history.length - 200); whispers.set(key, history); saveDatabase();
+      for (const client of wss.clients) {
         if (client.readyState !== 1) continue;
-        const viewer = client.joined?.identity;
-        if (viewer === joined.identity || viewer === toIdentity) client.send(JSON.stringify({ type: 'whisper', withIdentity: viewer === joined.identity ? toIdentity : joined.identity, message }));
+        const viewer = client.joined?.identity || client.directIdentity || client.inboxIdentity;
+        if (viewer === fromIdentity || viewer === toIdentity) client.send(JSON.stringify({ type: 'whisper', withIdentity: viewer === fromIdentity ? toIdentity : fromIdentity, message }));
       }
     } else if (data.type === 'message' && joined) {
       const text = String(data.text || '').trim().slice(0, 1000); if (!text) return;

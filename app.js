@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null;
+const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null;
 const ownReceipts = new Map();
 const readObserver = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting && entry.intersectionRatio >= 0.65) {
@@ -18,10 +18,26 @@ async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', 'X-PWG-Identity': identity, ...(options.headers || {}) } });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Die Anfrage ist fehlgeschlagen.'); return result;
 }
+async function loadRoomContacts() {
+  if (!myProfile) return;
+  try {
+    const data = await api('/api/contacts'); const list = $('contactList'); list.replaceChildren();
+    if (!data.contacts.length) { const empty = document.createElement('p'); empty.className = 'contact-empty'; empty.textContent = 'Hier erscheinen Personen aus gemeinsamen Räumen.'; list.append(empty); return; }
+    data.contacts.forEach(contact => {
+      const button = document.createElement('button'); button.className = 'contact-item'; button.type = 'button';
+      const avatar = document.createElement('span'); avatar.className = 'contact-avatar'; updateAvatarElement(avatar, contact.avatar, contact.name);
+      const label = document.createElement('span'); label.className = 'contact-name'; label.textContent = contact.name;
+      const action = document.createElement('span'); action.className = 'contact-whisper'; action.textContent = 'Flüstern ↗';
+      button.append(avatar, label, action); button.addEventListener('click', () => openWhisper(contact.identity, contact.name)); list.append(button);
+    });
+  } catch {}
+}
 function fillProfile(profile) {
   myProfile = profile; myName = profile.name; nameInput.value = myName; localStorage.setItem('pwgChatName', myName);
   $('profileName').textContent = profile.name; updateAvatarElement($('profileAvatar'), profile.avatar, profile.name);
   $('renameName').value = profile.name;
+  loadRoomContacts();
+  connectWhisperInbox();
 }
 function updateAvatarElement(element, avatar, name) {
   element.replaceChildren();
@@ -118,19 +134,11 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { if (activeWhisper) closeWhisper(); roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
+    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
     if (data.type === 'message' || data.type === 'image') renderMessage(data);
     if (data.type === 'avatarUpdate') document.querySelectorAll('.bubble[data-identity="' + CSS.escape(data.identity) + '"] .sender-avatar').forEach(element => updateAvatarElement(element, data.avatar, data.name));
-  if (data.type === 'whisperHistory' && activeWhisper?.identity === data.withIdentity) {
-      $('privateMessages').replaceChildren();
-      if (!data.messages.length) renderWhisperEmpty(); else data.messages.forEach(renderWhisperMessage);
-    }
-    if (data.type === 'whisper') {
-      if (activeWhisper?.identity === data.withIdentity) renderWhisperMessage(data.message);
-      else if (data.message.fromIdentity !== identity) openWhisper(data.withIdentity, data.message.name);
-    }
-    if (data.type === 'whisperError') { if (activeWhisper) renderWhisperNotice(data.message); else renderNotice(data.message); }
-    if (data.type === 'notice') renderNotice(data.text);
+    handleWhisperData(data);
+    if (data.type === 'notice') { renderNotice(data.text); loadRoomContacts(); }
     if (data.type === 'typing') renderTyping(data.users);
     if (data.type === 'readReceipt') updateReadReceipt(data.messageId, data.count);
   });
@@ -152,14 +160,19 @@ function renderMessage(msg) {
   $('messages').append(bubble); if (readObserver && msg.id && msg.name !== myName) readObserver.observe(bubble); else if (!readObserver && msg.id && msg.name !== myName && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'read', messageId: msg.id })); scrollDown();
 }
 function openWhisper(targetIdentity, targetName) {
-  if (!targetIdentity || targetIdentity === identity || socket?.readyState !== WebSocket.OPEN) return;
+  const inRoom = Boolean(roomCode && socket?.readyState === WebSocket.OPEN);
+  if (!targetIdentity || targetIdentity === identity || (!inRoom && !myProfile)) return;
   activeWhisper = { identity: targetIdentity, name: targetName };
-  chatWorkspace.classList.add('has-whisper'); $('privateChat').classList.remove('hidden'); $('privateTitle').textContent = 'Flüstern mit ' + targetName;
+  if (inRoom) chatWorkspace.classList.add('has-whisper');
+  else { home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); chatWorkspace.classList.add('whisper-only'); chat.classList.add('hidden'); }
+  $('privateChat').classList.remove('hidden'); $('privateTitle').textContent = 'Flüstern mit ' + targetName;
   $('privateMessages').replaceChildren();
-  socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); $('whisperMessage').focus();
+  if (inRoom) socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); else connectWhisperSocket(targetIdentity);
+  $('whisperMessage').focus();
 }
 function closeWhisper() {
   activeWhisper = null; chatWorkspace.classList.remove('has-whisper'); $('privateChat').classList.add('hidden'); $('privateMessages').replaceChildren();
+  if (!roomCode) { chatWorkspace.classList.remove('whisper-only'); chat.classList.remove('hidden'); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); if (whisperSocket && !whisperSocket.isInbox) { whisperSocket.close(); whisperSocket = null; } connectWhisperInbox(); }
 }
 function renderWhisperEmpty() { const empty = document.createElement('div'); empty.className = 'empty'; empty.innerHTML = '<span>✉</span><strong>Flüstern beginnt hier.</strong><small>Diese Unterhaltung ist nur für euch beide sichtbar.</small>'; $('privateMessages').append(empty); }
 function renderWhisperNotice(message) { const notice = document.createElement('div'); notice.className = 'notice'; notice.textContent = message; $('privateMessages').append(notice); }
@@ -173,7 +186,44 @@ function renderWhisperMessage(msg) {
   const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   bubble.append(sender, text, time); $('privateMessages').append(bubble); $('privateMessages').scrollTop = $('privateMessages').scrollHeight;
 }
-function sendWhisper(text) { if (activeWhisper && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'whisper', toIdentity: activeWhisper.identity, text })); }
+function handleWhisperData(data) {
+  if (data.type === 'whisperHistory' && activeWhisper?.identity === data.withIdentity) {
+    $('privateMessages').replaceChildren();
+    if (!data.messages.length) renderWhisperEmpty(); else data.messages.forEach(renderWhisperMessage);
+  } else if (data.type === 'whisper') {
+    if (activeWhisper?.identity === data.withIdentity) renderWhisperMessage(data.message);
+    else if (data.message.fromIdentity !== identity) openWhisper(data.withIdentity, data.message.name);
+  } else if (data.type === 'whisperError') {
+    if (activeWhisper) renderWhisperNotice(data.message); else error.textContent = data.message;
+  }
+}
+function connectWhisperSocket(targetIdentity) {
+  if (whisperSocket?.readyState === WebSocket.OPEN && (whisperSocket.isInbox || whisperSocket.dmWith === targetIdentity)) {
+    whisperSocket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); return;
+  }
+  if (whisperSocket?.isInbox && whisperSocket.readyState === WebSocket.CONNECTING) {
+    const current = whisperSocket; current.addEventListener('open', () => { if (whisperSocket === current && activeWhisper?.identity === targetIdentity) current.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); }, { once: true }); return;
+  }
+  if (whisperSocket) whisperSocket.close();
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const current = new WebSocket(scheme + '//' + location.host); current.dmWith = targetIdentity; whisperSocket = current;
+  current.addEventListener('open', () => current.send(JSON.stringify({ type: 'dmConnect', identity, withIdentity: targetIdentity })));
+  current.addEventListener('message', event => handleWhisperData(JSON.parse(event.data)));
+  current.addEventListener('close', () => { if (whisperSocket === current) whisperSocket = null; });
+}
+function connectWhisperInbox() {
+  if (!myProfile || roomCode || (whisperSocket && whisperSocket.readyState < WebSocket.CLOSING)) return;
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const current = new WebSocket(scheme + '//' + location.host); current.isInbox = true; whisperSocket = current;
+  current.addEventListener('open', () => current.send(JSON.stringify({ type: 'dmInbox', identity })));
+  current.addEventListener('message', event => handleWhisperData(JSON.parse(event.data)));
+  current.addEventListener('close', () => { if (whisperSocket === current) whisperSocket = null; });
+}
+function closeWhisperInbox() { if (whisperSocket?.isInbox) { const current = whisperSocket; whisperSocket = null; current.close(); } }
+function sendWhisper(text) {
+  const channel = roomCode ? socket : whisperSocket;
+  if (activeWhisper && channel?.readyState === WebSocket.OPEN) channel.send(JSON.stringify({ type: 'whisper', toIdentity: activeWhisper.identity, text }));
+}
 $('privateBack').addEventListener('click', closeWhisper);
 function updateReadReceipt(messageId, count) { const receipt = ownReceipts.get(messageId); if (receipt) receipt.textContent = '✓✓ Gelesen' + (count > 1 ? ' (' + count + ')' : ''); }
 function renderTyping(users) { const names = (users || []).filter(name => name !== myName); const indicator = $('typingIndicator'); indicator.textContent = names.length === 0 ? '' : names.length === 1 ? names[0] + ' tippt gerade…' : names.join(', ') + ' tippen gerade…'; }
@@ -182,7 +232,7 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { if (activeWhisper) closeWhisper(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; }
+function leaveRoom() { if (activeWhisper) closeWhisper(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
 $('create').addEventListener('click', () => connect('create'));
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6); error.textContent = ''; });
