@@ -11,8 +11,8 @@ const readObserver = 'IntersectionObserver' in window ? new IntersectionObserver
 let identity = localStorage.getItem('pwgChatIdentity');
 if (!identity) { identity = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }); localStorage.setItem('pwgChatIdentity', identity); }
 const savedRoomSession = (() => { try { return JSON.parse(localStorage.getItem('pwgChatSession') || 'null'); } catch { return null; } })();
-const inviteCode = (new URLSearchParams(location.search).get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-const hasInviteCode = /^[A-Z0-9]{6}$/.test(inviteCode);
+const inviteCode = (new URLSearchParams(location.search).get('room') || '').replace(/[^0-9]/g, '').slice(0, 6);
+const hasInviteCode = /^[0-9]{6}$/.test(inviteCode);
 nameInput.readOnly = true; nameInput.placeholder = 'Wird mit deinem Profil gespeichert';
 async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', 'X-PWG-Identity': identity, ...(options.headers || {}) } });
@@ -80,7 +80,7 @@ function connect(action) {
   error.textContent = ''; myName = myProfile.name;
   const roomName = roomNameInput.value.trim();
   if (action === 'create' && !roomName) { error.textContent = 'Bitte gib einen Raumnamen ein.'; roomNameInput.focus(); return; }
-  roomCode = codeInput.value.trim().toUpperCase();
+  roomCode = codeInput.value.trim().replace(/\D/g, '').slice(0, 6);
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(scheme + '//' + location.host);
   $('connection').classList.remove('offline'); $('connection').innerHTML = '<i></i> verbindet…';
@@ -89,7 +89,7 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); renderRoomTimetable(); updateConnection(true); }
+    if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
     if (data.type === 'message' || data.type === 'image') renderMessage(data);    if (data.type === 'notice') renderNotice(data.text);
     if (data.type === 'typing') renderTyping(data.users);
     if (data.type === 'readReceipt') updateReadReceipt(data.messageId, data.count);
@@ -116,8 +116,8 @@ function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringi
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
 function leaveRoom() { clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; }
 $('create').addEventListener('click', () => connect('create'));
-$('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Zeichen.'; codeInput.focus(); return; } connect('join'); });
-codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); error.textContent = ''; });
+$('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
+codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6); error.textContent = ''; });
 roomNameInput.addEventListener('input', () => error.textContent = '');$('message').addEventListener('input', () => { if ($('message').value.trim()) updateTyping(); else stopTyping(); });
 $('message').addEventListener('blur', stopTyping);
 $('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { stopTyping(); socket.send(JSON.stringify({ type: 'message', text })); input.value = ''; input.focus(); } });

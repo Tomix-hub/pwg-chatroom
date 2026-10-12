@@ -96,8 +96,8 @@ wss.on('connection', (socket) => {
       if (!user) return socket.send(JSON.stringify({ type: 'error', message: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' }));
       const name = user.name;
       if (data.type === 'join') {
-        const code = String(data.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-        if (!/^[A-Z0-9]{6}$/.test(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode ein.' }));
+        const code = String(data.code || '').replace(/[^0-9]/g, '').slice(0, 6);
+        if (!/^[0-9]{6}$/.test(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode ein.' }));
         if (!rooms.has(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Diesen Raum gibt es nicht. Prüfe den Code.' }));
         joined = { code, identity: user.identity, name }; socket.joined = joined;
         const room = rooms.get(code); room.clients.add(socket);
@@ -105,7 +105,7 @@ wss.on('connection', (socket) => {
       } else {
         const roomName = String(data.roomName || '').trim().slice(0, 32);
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
-        let code; do { code = randomInt(0, 36 ** 6).toString(36).toUpperCase().padStart(6, '0'); } while (rooms.has(code));
+        let code; do { code = randomInt(0, 1_000_000).toString().padStart(6, '0'); } while (rooms.has(code));
         rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
         joined = { code, identity: user.identity, name }; socket.joined = joined; const room = rooms.get(code); room.clients.add(socket);
         socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] })); broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
