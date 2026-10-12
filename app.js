@@ -24,6 +24,7 @@ if (!identity) { identity = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-
 const savedRoomSession = (() => { try { return JSON.parse(localStorage.getItem('pwgChatSession') || 'null'); } catch { return null; } })();
 const inviteCode = (new URLSearchParams(location.search).get('room') || '').replace(/[^0-9]/g, '').slice(0, 6);
 const hasInviteCode = /^[0-9]{6}$/.test(inviteCode);
+const notificationInviteId = (new URLSearchParams(location.search).get('invite') || '').toLowerCase();
 nameInput.readOnly = true; nameInput.placeholder = 'Wird mit deinem Profil gespeichert';
 async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', 'X-PWG-Identity': identity, ...(options.headers || {}) } });
@@ -74,19 +75,27 @@ async function loadRoomContacts() {
     });
   } catch {}
 }
-function renderFriendRows(listId, entries, emptyText, actions = false) {
+function renderFriendRows(listId, entries, emptyText, actions = false, removable = false) {
   const list = $(listId); list.replaceChildren();
   if (!entries.length) { const empty = document.createElement('p'); empty.className = 'social-empty'; empty.textContent = emptyText; list.append(empty); return; }
   entries.forEach(entry => {
     const row = document.createElement('div'); row.className = 'social-row';
     const name = document.createElement('strong'); name.textContent = entry.name; row.append(name);
-    if (actions) {
+    if (actions || removable) {
       const buttons = document.createElement('div'); buttons.className = 'social-actions';
-      const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'social-action'; accept.textContent = 'Annehmen';
-      accept.addEventListener('click', async () => { accept.disabled = true; try { await api('/api/friend-requests/' + encodeURIComponent(entry.id) + '/accept', { method: 'POST', body: JSON.stringify({}) }); $('friendStatus').textContent = 'Freundschaftsanfrage angenommen.'; await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; accept.disabled = false; } });
-      const decline = document.createElement('button'); decline.type = 'button'; decline.className = 'social-action'; decline.textContent = 'Ablehnen';
-      decline.addEventListener('click', async () => { decline.disabled = true; try { await api('/api/friend-requests/' + encodeURIComponent(entry.id), { method: 'DELETE' }); $('friendStatus').textContent = 'Anfrage abgelehnt.'; await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; decline.disabled = false; } });
-      buttons.append(accept, decline); row.append(buttons);
+      if (actions) {
+        const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'social-action'; accept.textContent = 'Annehmen';
+        accept.addEventListener('click', async () => { accept.disabled = true; try { await api('/api/friend-requests/' + encodeURIComponent(entry.id) + '/accept', { method: 'POST', body: JSON.stringify({}) }); $('friendStatus').textContent = 'Freundschaftsanfrage angenommen.'; await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; accept.disabled = false; } });
+        const decline = document.createElement('button'); decline.type = 'button'; decline.className = 'social-action'; decline.textContent = 'Ablehnen';
+        decline.addEventListener('click', async () => { decline.disabled = true; try { await api('/api/friend-requests/' + encodeURIComponent(entry.id), { method: 'DELETE' }); $('friendStatus').textContent = 'Anfrage abgelehnt.'; await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; decline.disabled = false; } });
+        buttons.append(accept, decline);
+      }
+      if (removable) {
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'social-action'; remove.textContent = 'Entfernen';
+        remove.addEventListener('click', async () => { remove.disabled = true; try { await api('/api/friends/' + encodeURIComponent(entry.identity), { method: 'DELETE', body: JSON.stringify({}) }); $('friendStatus').textContent = entry.name + ' wurde aus deiner Freundesliste entfernt.'; await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; remove.disabled = false; } });
+        buttons.append(remove);
+      }
+      row.append(buttons);
     }
     list.append(row);
   });
@@ -99,7 +108,7 @@ async function refreshFriendData() {
     if (!$('profileOverlay').classList.contains('hidden')) {
       renderFriendRows('incomingFriendRequests', data.incoming, 'Keine neuen Anfragen.', true);
       renderFriendRows('outgoingFriendRequests', data.outgoing, 'Keine ausstehenden Anfragen.');
-      renderFriendRows('friendsList', data.friends, 'Noch keine Freunde hinzugefügt.');
+      renderFriendRows('friendsList', data.friends, 'Noch keine Freunde hinzugefügt.', false, true);
       renderRoomInvitations(roomData.invites);
     }
   } catch {}
@@ -125,6 +134,14 @@ function renderRoomInvitations(entries) {
 function joinInvitedRoom(code) {
   if (roomCode) leaveRoom();
   codeInput.value = code; error.textContent = ''; connect('join');
+}
+async function joinRoomFromNotification() {
+  if (!/^[a-f0-9-]{36}$/.test(notificationInviteId)) return false;
+  try {
+    const result = await api('/api/room-invites/' + encodeURIComponent(notificationInviteId) + '/accept', { method: 'POST', body: JSON.stringify({}) });
+    history.replaceState(null, '', location.pathname); joinInvitedRoom(result.roomCode);
+  } catch (err) { error.textContent = err.message || 'Diese Raumeinladung ist nicht mehr verfügbar.'; }
+  return true;
 }
 async function openRoomInviteDialog() {
   if (!roomCode || socket?.readyState !== WebSocket.OPEN) { renderNotice('Warte kurz, bis du mit dem Raum verbunden bist.'); return; }
@@ -243,8 +260,8 @@ async function loadProfile() {
       try {
         const data = await api('/api/register', { method: 'POST', body: JSON.stringify({ identity, name: savedName }) });
         fillProfile(data.profile);
-        if (hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
-        else if (savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
+        if (!notificationInviteId && hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
+        else if (!notificationInviteId && savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
         return;
       } catch (recoveryError) {
         $('setupName').value = savedName;
@@ -263,7 +280,8 @@ async function loadProfile() {
 $('setupForm').addEventListener('submit', async event => {
   event.preventDefault(); const input = $('setupName'), output = $('setupError'); output.textContent = '';
   try { const data = await api('/api/register', { method: 'POST', body: JSON.stringify({ identity, name: input.value.trim() }) }); fillProfile(data.profile); $('setupOverlay').classList.add('hidden');
-    if (hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
+    if (notificationInviteId) await joinRoomFromNotification();
+    else if (hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
     else if (savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
   } catch (err) { output.textContent = err.message; input.focus(); }
 });
@@ -524,6 +542,7 @@ $('copy').addEventListener('click', async () => {
 $('back').addEventListener('click', leaveRoom); $('leaveRoom').addEventListener('click', leaveRoom);
 if (hasInviteCode) codeInput.value = inviteCode;
 loadProfile().then(() => {
+  if (myProfile && notificationInviteId) { joinRoomFromNotification(); return; }
   if (myProfile && hasInviteCode) connect('join'); else if (myProfile && savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
   if (!myProfile) return;
   const destination = new URLSearchParams(location.search), open = destination.get('open');

@@ -140,6 +140,15 @@ const server = http.createServer(async (req, res) => {
       const outgoing = friendRequests.filter(request => request.from === user.identity).map(request => ({ id: request.id, time: request.time, identity: request.to, ...publicUser(getUser(request.to)) }));
       return send(res, 200, { friends, incoming, outgoing });
     }
+    if (req.method === 'DELETE' && /^\/api\/friends\/[a-f0-9-]{36}$/i.test(url.pathname)) {
+      const targetId = url.pathname.split('/')[3], target = getUser(targetId);
+      if (!target || targetId === user.identity) return send(res, 404, { error: 'Dieses Profil wurde nicht gefunden.' });
+      user.friends = (user.friends || []).filter(friendId => friendId !== targetId);
+      target.friends = (target.friends || []).filter(friendId => friendId !== user.identity);
+      friendRequests = friendRequests.filter(request => !((request.from === user.identity && request.to === targetId) || (request.from === targetId && request.to === user.identity)));
+      roomInvites = roomInvites.filter(invite => !((invite.from === user.identity && invite.to === targetId) || (invite.from === targetId && invite.to === user.identity)));
+      saveDatabase(); return send(res, 200, { removed: true });
+    }
     if (req.method === 'POST' && url.pathname === '/api/friend-requests') {
       const targetId = String(data.identity || ''), target = getUser(targetId);
       if (!target || !/^[a-f0-9-]{36}$/i.test(targetId) || targetId === user.identity) return send(res, 400, { error: 'Dieses Profil ist nicht verfügbar.' });
@@ -178,7 +187,7 @@ const server = http.createServer(async (req, res) => {
       if (!Array.from(room.clients).some(client => client.joined?.identity === user.identity)) return send(res, 403, { error: 'Du musst selbst im Raum sein, um Freunde einzuladen.' });
       if (roomInvites.some(invite => invite.to === targetId && invite.code === code)) return send(res, 409, { error: 'Diese Person wurde schon in den Raum eingeladen.' });
       const invite = { id: randomUUID(), from: user.identity, to: targetId, code, roomName: room.name, time: new Date().toISOString() };
-      roomInvites.push(invite); sendPush(targetId, 'Einladung in einen Chatraum', user.name + ' lädt dich in „' + room.name + '“ ein.', 'room-' + invite.id, '/?open=profile'); return send(res, 201, { sent: true });
+      roomInvites.push(invite); sendPush(targetId, 'Einladung in einen Chatraum', user.name + ' lädt dich in „' + room.name + '“ ein.', 'room-' + invite.id, '/?invite=' + invite.id); return send(res, 201, { sent: true });
     }
     if (req.method === 'POST' && /^\/api\/room-invites\/[a-f0-9-]{36}\/accept$/i.test(url.pathname)) {
       removeOldRoomInvites();
