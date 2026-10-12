@@ -239,7 +239,7 @@ codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.re
 roomNameInput.addEventListener('input', () => error.textContent = '');$('message').addEventListener('input', () => { if ($('message').value.trim()) updateTyping(); else stopTyping(); });
 $('message').addEventListener('blur', stopTyping);
 $('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { stopTyping(); socket.send(JSON.stringify({ type: 'message', text })); input.value = ''; input.focus(); } });
-$('whisperForm').addEventListener('submit', event => { event.preventDefault(); const input = $('whisperMessage'), text = input.value.trim(); if (text && activeWhisper && socket?.readyState === WebSocket.OPEN) { sendWhisper(text); input.value = ''; input.focus(); } });
+$('whisperForm').addEventListener('submit', event => { event.preventDefault(); const input = $('whisperMessage'), text = input.value.trim(), channel = roomCode ? socket : whisperSocket; if (text && activeWhisper && channel?.readyState === WebSocket.OPEN) { sendWhisper(text); input.value = ''; input.focus(); } });
 $('imageButton').addEventListener('click', () => $('imageFile').click());
 $('imageFile').addEventListener('change', async event => {
   const file = event.target.files[0]; if (!file) return;
