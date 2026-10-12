@@ -1,5 +1,16 @@
 const $ = (id) => document.getElementById(id);
 const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null;
+const homeworkCatalog = [
+  ['englisch-sude', 'Englisch', 'Frau Sude'], ['mathe-funk', 'Mathe', 'Frau Funk'], ['kunst-wenzler', 'Kunst', 'Frau Wenzler'], ['sport-debus', 'Sport', 'Herr Debus'],
+  ['englisch-adler', 'Englisch', 'Frau Adler'], ['mathe-schindler', 'Mathe', 'Herr Schindler'], ['kunst-sapcanovic', 'Kunst', 'Frau Sapcanovic'], ['sport-halve', 'Sport', 'Herr Halve'],
+  ['sowi-debus', 'SoWi', 'Herr Debus'], ['vertiefung-deutsch-graw', 'Vertiefung Deutsch', 'Frau Graw'], ['vertiefung-mathe-stenner', 'Vertiefung Mathe', 'Herr Stenner'],
+  ['vertiefung-englisch-koerner', 'Vertiefung Englisch', 'Frau Körner'], ['vertiefung-mathe-tasdemir', 'Vertiefung Mathe', 'Frau Tasdemir'],
+  ['biologie-halve', 'Biologie', 'Herr Halve'], ['biologie-neutsch', 'Biologie', 'Frau Neutsch'], ['paedagogik-tasdemir', 'Pädagogik', 'Frau Tasdemir'],
+  ['deutsch-pfeiffer', 'Deutsch', 'Frau Pfeiffer'], ['chemie-ernst', 'Chemie', 'Frau Ernst'], ['spanisch-ewering', 'Spanisch', 'Herr Ewering'], ['spanisch-jackenkroll', 'Spanisch', 'Frau Jackenkroll'],
+  ['geschichte-erben', 'Geschichte', 'Herr Erben'], ['geschichte-kues', 'Geschichte', 'Frau Kues'], ['franzoesisch-kues', 'Französisch', 'Frau Kues'],
+  ['chemie-misselwitz', 'Chemie', 'Herr Misselwitz'], ['philosophie-wenzler', 'Philosophie', 'Frau Wenzler'], ['sowi-hillebrand', 'SoWi', 'Herr Hillebrand']
+].map(([id, subject, teacher]) => ({ id, subject, teacher }));
+let activeHomeworkFolder = null, homeworkReturnTo = 'home', homeworkRefreshTimer = null, homeworkLatestTime = '', homeworkImageData = '';
 const ownReceipts = new Map();
 const readObserver = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting && entry.intersectionRatio >= 0.65) {
@@ -31,6 +42,63 @@ async function loadRoomContacts() {
       button.append(avatar, label, action); button.addEventListener('click', () => openWhisper(contact.identity, contact.name)); list.append(button);
     });
   } catch {}
+}
+function showHomeworkFolders() {
+  $('homeworkFolderView').classList.add('hidden'); $('homeworkFolders').classList.remove('hidden');
+  if (homeworkRefreshTimer) clearInterval(homeworkRefreshTimer); homeworkRefreshTimer = null; activeHomeworkFolder = null;
+}
+function renderHomeworkFolders() {
+  const list = $('homeworkFolders'); list.replaceChildren();
+  homeworkCatalog.forEach(folder => {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'homework-folder';
+    const icon = document.createElement('span'); icon.className = 'room-icon'; icon.textContent = '▤';
+    const copy = document.createElement('span'); copy.className = 'homework-folder-copy';
+    const subject = document.createElement('strong'); subject.textContent = folder.subject;
+    const teacher = document.createElement('small'); teacher.textContent = 'bei ' + folder.teacher;
+    copy.append(subject, teacher); button.append(icon, copy); button.addEventListener('click', () => openHomeworkFolder(folder)); list.append(button);
+  });
+}
+function renderHomeworkEntry(entry, folder) {
+  const item = document.createElement('article'); item.className = 'homework-entry';
+  const head = document.createElement('div'); head.className = 'homework-entry-head';
+  const author = document.createElement('strong'); author.textContent = entry.name;
+  const time = document.createElement('time'); const date = new Date(entry.time); time.dateTime = entry.time; time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+  head.append(author, time); item.append(head);
+  if (entry.text) { const text = document.createElement('p'); text.className = 'homework-entry-text'; text.textContent = entry.text; item.append(text); }
+  if (entry.image) {
+    const image = document.createElement('img'); image.className = 'homework-entry-image'; image.src = entry.image; image.alt = 'Geteiltes Bild von ' + entry.name; image.loading = 'lazy'; item.append(image);
+    const save = document.createElement('button'); save.type = 'button'; save.className = 'homework-save-image'; save.textContent = '↓ In Galerie speichern';
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        const blob = await (await fetch(entry.image)).blob(); const file = new File([blob], 'PWG-' + folder.subject.replace(/[^\p{L}\p{N}-]/gu, '-') + '.jpg', { type: 'image/jpeg' });
+        if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'Bild für ' + folder.subject, text: 'Bild aus PWG Chatroom' });
+        else { const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = file.name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); $('homeworkStatus').textContent = 'Bild heruntergeladen. Öffne es und wähle „Bild sichern“, um es in Fotos abzulegen.'; }
+      } catch (err) { if (err.name !== 'AbortError') $('homeworkStatus').textContent = 'Das Bild konnte nicht gespeichert werden.'; }
+      finally { save.disabled = false; }
+    }); item.append(save);
+  }
+  $('homeworkEntries').append(item);
+}
+async function loadHomeworkEntries(folder, append = false) {
+  const list = $('homeworkEntries');
+  if (!append) { list.replaceChildren(); homeworkLatestTime = ''; }
+  try {
+    const query = new URLSearchParams({ folder: folder.id }); if (append && homeworkLatestTime) query.set('after', homeworkLatestTime);
+    const data = await api('/api/homework?' + query.toString());
+    if (!append && data.entries.length === 0) { const empty = document.createElement('p'); empty.className = 'homework-empty'; empty.textContent = 'Hier gibt es noch keine Beiträge. Teile den ersten!'; list.append(empty); }
+    data.entries.forEach(entry => { list.querySelector('.homework-empty')?.remove(); renderHomeworkEntry(entry, folder); if (entry.time > homeworkLatestTime) homeworkLatestTime = entry.time; });
+  } catch (err) { if (!append) { const message = document.createElement('p'); message.className = 'homework-empty'; message.textContent = err.message || 'Die Beiträge konnten nicht geladen werden.'; list.replaceChildren(message); } }
+}
+function openHomeworkFolder(folder) {
+  activeHomeworkFolder = folder; homeworkLatestTime = ''; $('homeworkFolders').classList.add('hidden'); $('homeworkFolderView').classList.remove('hidden');
+  $('homeworkFolderTitle').textContent = folder.subject; $('homeworkFolderTeacher').textContent = 'bei ' + folder.teacher; $('homeworkText').value = ''; $('homeworkStatus').textContent = ''; $('homeworkImageName').textContent = ''; $('homeworkImage').value = '';
+  loadHomeworkEntries(folder); if (homeworkRefreshTimer) clearInterval(homeworkRefreshTimer); homeworkRefreshTimer = setInterval(() => { if (activeHomeworkFolder?.id === folder.id) loadHomeworkEntries(folder, true); }, 10_000);
+}
+function closeHomework() {
+  $('homeworkWorkspace').classList.add('hidden'); showHomeworkFolders();
+  if (homeworkReturnTo === 'chat') { home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); }
+  else { chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); }
 }
 function fillProfile(profile) {
   myProfile = profile; myName = profile.name; nameInput.value = myName; localStorage.setItem('pwgChatName', myName);
@@ -77,6 +145,34 @@ $('setupForm').addEventListener('submit', async event => {
   } catch (err) { output.textContent = err.message; input.focus(); }
 });
 $('profileButton').addEventListener('click', () => $('profileOverlay').classList.remove('hidden'));
+$('homeworkButton').addEventListener('click', () => {
+  if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
+  homeworkReturnTo = chatWorkspace.classList.contains('hidden') ? 'home' : 'chat';
+  home.classList.add('hidden'); chatWorkspace.classList.add('hidden'); $('homeworkWorkspace').classList.remove('hidden'); showHomeworkFolders(); renderHomeworkFolders();
+});
+$('homeworkBack').addEventListener('click', closeHomework);
+$('homeworkFoldersBack').addEventListener('click', showHomeworkFolders);
+$('homeworkImageButton').addEventListener('click', () => $('homeworkImage').click());
+$('homeworkImage').addEventListener('change', async event => {
+  const file = event.target.files[0]; homeworkImageData = ''; $('homeworkImageName').textContent = ''; if (!file) return;
+  const status = $('homeworkStatus'); status.textContent = '';
+  if (!file.type.startsWith('image/')) { status.textContent = 'Bitte wähle eine Bilddatei aus.'; event.target.value = ''; return; }
+  if (file.size > 15 * 1024 * 1024) { status.textContent = 'Das Bild ist zu groß. Bitte wähle ein kleineres Bild.'; event.target.value = ''; return; }
+  try { homeworkImageData = await compressHomeworkImage(file); $('homeworkImageName').textContent = file.name; }
+  catch (err) { status.textContent = err.message || 'Das Bild konnte nicht vorbereitet werden.'; event.target.value = ''; }
+});
+$('homeworkForm').addEventListener('submit', async event => {
+  event.preventDefault(); const text = $('homeworkText').value.trim(), status = $('homeworkStatus'), button = $('homeworkSubmit');
+  if (!activeHomeworkFolder || (!text && !homeworkImageData)) { status.textContent = 'Schreibe etwas oder wähle ein Bild aus.'; return; }
+  button.disabled = true; status.textContent = 'Wird geteilt …';
+  try {
+    const data = await api('/api/homework', { method: 'POST', body: JSON.stringify({ folder: activeHomeworkFolder.id, text, image: homeworkImageData }) });
+    $('homeworkEntries').querySelector('.homework-empty')?.remove(); renderHomeworkEntry(data.entry, activeHomeworkFolder);
+    if (data.entry.time > homeworkLatestTime) homeworkLatestTime = data.entry.time;
+    $('homeworkText').value = ''; $('homeworkImage').value = ''; $('homeworkImageName').textContent = ''; homeworkImageData = ''; status.textContent = 'Beitrag wurde geteilt.';
+  } catch (err) { status.textContent = err.message || 'Der Beitrag konnte nicht geteilt werden.'; }
+  finally { button.disabled = false; }
+});
 $('closeProfile').addEventListener('click', () => $('profileOverlay').classList.add('hidden'));
 $('profileOverlay').addEventListener('click', event => { if (event.target === $('profileOverlay')) $('profileOverlay').classList.add('hidden'); });
 $('renameForm').addEventListener('submit', async event => {
@@ -254,6 +350,16 @@ async function compressImage(file) {
   const url = URL.createObjectURL(file);
   try { const image = new Image(); image.src = url; await image.decode(); const scale = Math.min(1, 1200 / Math.max(image.naturalWidth, image.naturalHeight)); const canvas = document.createElement('canvas'); canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale); canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height); for (const quality of [0.78, 0.66, 0.54, 0.42]) { const result = canvas.toDataURL('image/jpeg', quality); if (result.length <= 650000) return result; } return canvas.toDataURL('image/jpeg', 0.35); }
   finally { URL.revokeObjectURL(url); }
+}
+async function compressHomeworkImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image(); image.src = url; await image.decode();
+    const scale = Math.min(1, 1100 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale)); canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    for (const quality of [0.76, 0.62, 0.48, 0.34, 0.22]) { const result = canvas.toDataURL('image/jpeg', quality); if (result.length <= 650000) return result; }
+    throw new Error('Das Bild ist zu groß. Bitte wähle ein anderes Bild.');
+  } finally { URL.revokeObjectURL(url); }
 }
 $('copy').addEventListener('click', async () => {
   const url = new URL(location.href); url.search = ''; url.searchParams.set('room', roomCode); url.hash = '';
