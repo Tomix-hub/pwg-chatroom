@@ -29,3 +29,8 @@ body[data-theme=stone]{--ink:#fff;--muted:#f0e8db;--paper:#8d7659;--card:#30271d
 
 /* Tippstatus und Lesebestaetigungen */
 .typing-indicator{min-height:19px;padding:2px 20px 0;color:#b8a36e;font-size:11px;font-style:italic}.read-receipt{margin:4px 3px 0;color:#b8a36e;font-size:10px}.bubble:not(.mine) .read-receipt{display:none}body[data-theme=light] .typing-indicator,body[data-theme=light] .read-receipt{color:#555}body[data-theme=stone] .typing-indicator,body[data-theme=stone] .read-receipt{color:#fff}
+
+/* Eigenes Menü für die Designauswahl */
+.design-button{padding-inline:12px}.design-dialog .theme-options{margin-top:20px}.design-dialog .theme-option{min-height:48px}.design-dialog .theme-status{margin-top:14px}
+@media(max-width:760px){.brand{flex-wrap:wrap}.brand .online-pill{margin-left:auto}.brand .profile-button{padding:8px 10px}}
+@media(max-width:390px){.brand{gap:7px}.brand .online-pill{padding:7px}.brand .profile-button{padding:8px;font-size:11px}}

@@ -57,6 +57,10 @@ $('setupForm').addEventListener('submit', async event => {
 $('profileButton').addEventListener('click', () => $('profileOverlay').classList.remove('hidden'));
 $('closeProfile').addEventListener('click', () => $('profileOverlay').classList.add('hidden'));
 $('profileOverlay').addEventListener('click', event => { if (event.target === $('profileOverlay')) $('profileOverlay').classList.add('hidden'); });
+$('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
+$('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
+$('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); } });
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
