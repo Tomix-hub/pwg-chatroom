@@ -23,6 +23,7 @@ let homework = [];
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
 let database = { users: {}, names: {} };
 let friendRequests = [];
+let roomInvites = [];
 let hadStoredProfiles = false;
 try {
   const previous = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -47,6 +48,7 @@ function removeExpiredHomework() {
   homework = remaining; saveDatabase(); return true;
 }
 const homeworkExpiryTimer = setInterval(removeExpiredHomework, 60_000); homeworkExpiryTimer.unref?.();
+function removeOldRoomInvites() { const cutoff = Date.now() - 24 * 60 * 60 * 1000; roomInvites = roomInvites.filter(invite => Date.parse(invite.time) > cutoff && rooms.has(invite.code)); }
 if (hadStoredProfiles) saveDatabase();
 function cleanName(value) { return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 24); }
 function normName(value) { return cleanName(value).toLocaleLowerCase('de'); }
@@ -132,6 +134,34 @@ const server = http.createServer(async (req, res) => {
       const requestId = url.pathname.split('/')[3], requestIndex = friendRequests.findIndex(request => request.id === requestId && request.to === user.identity);
       if (requestIndex < 0) return send(res, 404, { error: 'Diese Anfrage ist nicht mehr verfügbar.' });
       friendRequests.splice(requestIndex, 1); saveDatabase(); return send(res, 200, { declined: true });
+    }
+    if (url.pathname === '/api/room-invites' && req.method === 'GET') {
+      removeOldRoomInvites();
+      const invites = roomInvites.filter(invite => invite.to === user.identity).map(invite => ({ id: invite.id, roomCode: invite.code, roomName: invite.roomName, time: invite.time, fromName: getUser(invite.from)?.name || 'Ein Freund' }));
+      return send(res, 200, { invites });
+    }
+    if (url.pathname === '/api/room-invites' && req.method === 'POST') {
+      removeOldRoomInvites();
+      const targetId = String(data.identity || ''), code = String(data.roomCode || '').replace(/[^0-9]/g, '').slice(0, 6), room = rooms.get(code);
+      if (!getUser(targetId) || !/^[a-f0-9-]{36}$/i.test(targetId) || targetId === user.identity) return send(res, 400, { error: 'Dieses Profil ist nicht verfügbar.' });
+      if (!room || !/^[0-9]{6}$/.test(code)) return send(res, 400, { error: 'Dieser Raum ist nicht mehr verfügbar.' });
+      if (!(user.friends || []).includes(targetId)) return send(res, 403, { error: 'Du kannst nur angenommene Freunde einladen.' });
+      if (!Array.from(room.clients).some(client => client.joined?.identity === user.identity)) return send(res, 403, { error: 'Du musst selbst im Raum sein, um Freunde einzuladen.' });
+      if (roomInvites.some(invite => invite.to === targetId && invite.code === code)) return send(res, 409, { error: 'Diese Person wurde schon in den Raum eingeladen.' });
+      const invite = { id: randomUUID(), from: user.identity, to: targetId, code, roomName: room.name, time: new Date().toISOString() };
+      roomInvites.push(invite); return send(res, 201, { sent: true });
+    }
+    if (req.method === 'POST' && /^\/api\/room-invites\/[a-f0-9-]{36}\/accept$/i.test(url.pathname)) {
+      removeOldRoomInvites();
+      const inviteId = url.pathname.split('/')[3], inviteIndex = roomInvites.findIndex(invite => invite.id === inviteId && invite.to === user.identity);
+      if (inviteIndex < 0) return send(res, 404, { error: 'Diese Raumeinladung ist nicht mehr verfügbar.' });
+      const invite = roomInvites[inviteIndex]; if (!rooms.has(invite.code)) { roomInvites.splice(inviteIndex, 1); return send(res, 410, { error: 'Der Raum ist nicht mehr verfügbar.' }); }
+      roomInvites.splice(inviteIndex, 1); return send(res, 200, { roomCode: invite.code });
+    }
+    if (req.method === 'DELETE' && /^\/api\/room-invites\/[a-f0-9-]{36}$/i.test(url.pathname)) {
+      const inviteId = url.pathname.split('/')[3], inviteIndex = roomInvites.findIndex(invite => invite.id === inviteId && invite.to === user.identity);
+      if (inviteIndex < 0) return send(res, 404, { error: 'Diese Raumeinladung ist nicht mehr verfügbar.' });
+      roomInvites.splice(inviteIndex, 1); return send(res, 200, { declined: true });
     }
     if (url.pathname === '/api/homework') {
       if (req.method === 'GET') {

@@ -63,14 +63,58 @@ function renderFriendRows(listId, entries, emptyText, actions = false) {
 async function refreshFriendData() {
   if (!myProfile) return;
   try {
-    const data = await api('/api/friends');
-    const badge = $('friendRequestBadge'); badge.textContent = data.incoming.length; badge.classList.toggle('hidden', data.incoming.length === 0);
+    const [data, roomData] = await Promise.all([api('/api/friends'), api('/api/room-invites')]);
+    const badge = $('friendRequestBadge'), notificationCount = data.incoming.length + roomData.invites.length; badge.textContent = notificationCount; badge.classList.toggle('hidden', notificationCount === 0);
     if (!$('profileOverlay').classList.contains('hidden')) {
       renderFriendRows('incomingFriendRequests', data.incoming, 'Keine neuen Anfragen.', true);
       renderFriendRows('outgoingFriendRequests', data.outgoing, 'Keine ausstehenden Anfragen.');
       renderFriendRows('friendsList', data.friends, 'Noch keine Freunde hinzugefügt.');
+      renderRoomInvitations(roomData.invites);
     }
   } catch {}
+}
+function renderRoomInvitations(entries) {
+  const list = $('roomInvitations'); list.replaceChildren();
+  if (!entries.length) { const empty = document.createElement('p'); empty.className = 'social-empty'; empty.textContent = 'Keine neuen Raumeinladungen.'; list.append(empty); return; }
+  entries.forEach(entry => {
+    const row = document.createElement('div'); row.className = 'social-row';
+    const label = document.createElement('strong'); label.textContent = (entry.roomName || 'Chatraum') + ' · ' + entry.fromName; row.append(label);
+    const actions = document.createElement('div'); actions.className = 'social-actions';
+    const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'social-action'; accept.textContent = 'Beitreten';
+    accept.addEventListener('click', async () => {
+      accept.disabled = true;
+      try { const result = await api('/api/room-invites/' + encodeURIComponent(entry.id) + '/accept', { method: 'POST', body: JSON.stringify({}) }); $('profileOverlay').classList.add('hidden'); joinInvitedRoom(result.roomCode); }
+      catch (err) { $('friendStatus').textContent = err.message; accept.disabled = false; await refreshFriendData(); }
+    });
+    const decline = document.createElement('button'); decline.type = 'button'; decline.className = 'social-action'; decline.textContent = 'Ablehnen';
+    decline.addEventListener('click', async () => { decline.disabled = true; try { await api('/api/room-invites/' + encodeURIComponent(entry.id), { method: 'DELETE' }); await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; decline.disabled = false; } });
+    actions.append(accept, decline); row.append(actions); list.append(row);
+  });
+}
+function joinInvitedRoom(code) {
+  if (roomCode) leaveRoom();
+  codeInput.value = code; error.textContent = ''; connect('join');
+}
+async function openRoomInviteDialog() {
+  if (!roomCode || socket?.readyState !== WebSocket.OPEN) { renderNotice('Warte kurz, bis du mit dem Raum verbunden bist.'); return; }
+  $('roomInviteName').textContent = $('roomTitle').textContent; $('roomInviteStatus').textContent = 'Freunde können die Einladung in ihrem Profil annehmen.';
+  $('roomInviteOverlay').classList.remove('hidden');
+  const list = $('roomInviteFriends'); list.replaceChildren();
+  try {
+    const data = await api('/api/friends');
+    if (!data.friends.length) { const empty = document.createElement('p'); empty.className = 'social-empty'; empty.textContent = 'Du hast noch keine angenommenen Freunde.'; list.append(empty); return; }
+    data.friends.forEach(friend => {
+      const row = document.createElement('div'); row.className = 'social-row';
+      const name = document.createElement('strong'); name.textContent = friend.name;
+      const invite = document.createElement('button'); invite.type = 'button'; invite.className = 'social-action'; invite.textContent = 'Einladen';
+      invite.addEventListener('click', async () => {
+        invite.disabled = true; $('roomInviteStatus').textContent = 'Einladung wird gesendet …';
+        try { await api('/api/room-invites', { method: 'POST', body: JSON.stringify({ identity: friend.identity, roomCode, roomName: $('roomTitle').textContent }) }); invite.textContent = 'Eingeladen ✓'; $('roomInviteStatus').textContent = friend.name + ' wurde in den Raum eingeladen.'; }
+        catch (err) { $('roomInviteStatus').textContent = err.message; invite.disabled = false; }
+      });
+      row.append(name, invite); list.append(row);
+    });
+  } catch (err) { $('roomInviteStatus').textContent = err.message; }
 }
 function showHomeworkFolders() {
   $('homeworkFolderView').classList.add('hidden'); $('homeworkFolders').classList.remove('hidden');
@@ -192,6 +236,9 @@ $('setupForm').addEventListener('submit', async event => {
   } catch (err) { output.textContent = err.message; input.focus(); }
 });
 $('profileButton').addEventListener('click', () => { $('profileOverlay').classList.remove('hidden'); refreshFriendData(); });
+$('inviteFriends').addEventListener('click', openRoomInviteDialog);
+$('closeRoomInvite').addEventListener('click', () => $('roomInviteOverlay').classList.add('hidden'));
+$('roomInviteOverlay').addEventListener('click', event => { if (event.target === $('roomInviteOverlay')) $('roomInviteOverlay').classList.add('hidden'); });
 $('homeworkButton').addEventListener('click', () => {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   homeworkReturnTo = chatWorkspace.classList.contains('hidden') ? 'home' : 'chat';
@@ -273,7 +320,7 @@ async function compressAvatar(file) {
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); } });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('roomInviteOverlay').classList.add('hidden'); } });
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
