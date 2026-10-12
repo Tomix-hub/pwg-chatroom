@@ -127,7 +127,7 @@ function connect(action) {
     }
     if (data.type === 'whisper') {
       if (activeWhisper?.identity === data.withIdentity) renderWhisperMessage(data.message);
-      else renderNotice('Private Nachricht von ' + data.message.name + '. Tippe auf den Namen im Raumchat, um zu antworten.');
+      else if (data.message.fromIdentity !== identity) openWhisper(data.withIdentity, data.message.name);
     }
     if (data.type === 'whisperError') { if (activeWhisper) renderWhisperNotice(data.message); else renderNotice(data.message); }
     if (data.type === 'notice') renderNotice(data.text);
@@ -164,8 +164,10 @@ function closeWhisper() {
 function renderWhisperEmpty() { const empty = document.createElement('div'); empty.className = 'empty'; empty.innerHTML = '<span>✉</span><strong>Flüstern beginnt hier.</strong><small>Diese Unterhaltung ist nur für euch beide sichtbar.</small>'; $('privateMessages').append(empty); }
 function renderWhisperNotice(message) { const notice = document.createElement('div'); notice.className = 'notice'; notice.textContent = message; $('privateMessages').append(notice); }
 function renderWhisperMessage(msg) {
+  if (msg.id && $('privateMessages').querySelector('[data-whisper-id="' + CSS.escape(msg.id) + '"]')) return;
   const empty = $('privateMessages').querySelector('.empty'); if (empty) empty.remove();
   const bubble = document.createElement('article'); bubble.className = 'bubble' + (msg.fromIdentity === identity ? ' mine' : '');
+  if (msg.id) bubble.dataset.whisperId = msg.id;
   const sender = document.createElement('span'); sender.className = 'sender'; sender.textContent = msg.fromIdentity === identity ? 'Du' : msg.name;
   const text = document.createElement('div'); text.className = 'text'; text.textContent = msg.text;
   const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });

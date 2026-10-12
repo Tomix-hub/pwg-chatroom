@@ -141,7 +141,7 @@ wss.on('connection', (socket) => {
       const recipients = [...room.clients].filter(client => client.readyState === 1 && client.joined?.identity === toIdentity);
       if (!recipients.length) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Die Person ist nicht mehr in diesem Raum.' }));
       const key = whisperKey(joined.code, joined.identity, toIdentity), history = whispers.get(key) || [];
-      const message = { fromIdentity: joined.identity, name: joined.name, text, time: new Date().toISOString() };
+      const message = { id: randomUUID(), fromIdentity: joined.identity, name: joined.name, text, time: new Date().toISOString() };
       history.push(message); if (history.length > 200) history.splice(0, history.length - 200); whispers.set(key, history);
       for (const client of room.clients) {
         if (client.readyState !== 1) continue;
