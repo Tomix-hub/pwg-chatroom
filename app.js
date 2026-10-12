@@ -24,7 +24,28 @@ function fillProfile(profile) {
 }
 async function loadProfile() {
   try { const data = await api('/api/profile'); fillProfile(data.profile); }
-  catch { $('setupOverlay').classList.remove('hidden'); $('setupName').focus(); }
+  catch (profileError) {
+    const savedName = localStorage.getItem('pwgChatName') || '';
+    if (profileError.message.startsWith('Profil nicht gefunden') && savedName) {
+      try {
+        const data = await api('/api/register', { method: 'POST', body: JSON.stringify({ identity, name: savedName }) });
+        fillProfile(data.profile);
+        if (hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
+        else if (savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
+        return;
+      } catch (recoveryError) {
+        $('setupName').value = savedName;
+        $('setupError').textContent = recoveryError.message;
+        $('setupOverlay').classList.remove('hidden');
+        $('setupName').focus();
+        return;
+      }
+    }
+    $('setupOverlay').classList.remove('hidden');
+    $('setupName').value = savedName;
+    if (savedName) $('setupError').textContent = profileError.message;
+    $('setupName').focus();
+  }
 }
 $('setupForm').addEventListener('submit', async event => {
   event.preventDefault(); const input = $('setupName'), output = $('setupError'); output.textContent = '';
