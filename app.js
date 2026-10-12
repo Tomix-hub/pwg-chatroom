@@ -74,21 +74,94 @@ $('renameForm').addEventListener('submit', async event => {
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
-const timetableStorageKey = 'pwgPersonalTimetableUrl';
-function showTimetable(url) {
-  $('timetableFrame').src = url;
+const timetableStorageKey = 'pwgPersonalTimetableUrl:' + identity;
+let timetableObjectUrl = null;
+function openTimetableDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('pwg-chatroom-private', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('timetables', { keyPath: 'key' });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Der Gerätespeicher ist nicht verfügbar.'));
+  });
+}
+async function saveTimetableFile(file) {
+  const db = await openTimetableDatabase();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction('timetables', 'readwrite').objectStore('timetables').put({ key: identity, name: file.name, type: file.type, blob: file });
+    request.onsuccess = () => { db.close(); resolve(); };
+    request.onerror = () => { db.close(); reject(request.error || new Error('Die Datei konnte nicht gespeichert werden.')); };
+  });
+}
+async function getTimetableFile() {
+  const db = await openTimetableDatabase();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction('timetables', 'readonly').objectStore('timetables').get(identity);
+    request.onsuccess = () => { db.close(); resolve(request.result || null); };
+    request.onerror = () => { db.close(); reject(request.error || new Error('Die gespeicherte Datei konnte nicht geladen werden.')); };
+  });
+}
+async function deleteTimetableFile() {
+  const db = await openTimetableDatabase();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction('timetables', 'readwrite').objectStore('timetables').delete(identity);
+    request.onsuccess = () => { db.close(); resolve(); };
+    request.onerror = () => { db.close(); reject(request.error || new Error('Die Datei konnte nicht entfernt werden.')); };
+  });
+}
+function showTimetable(url, type = 'application/pdf') {
+  if (timetableObjectUrl && timetableObjectUrl !== url) URL.revokeObjectURL(timetableObjectUrl);
+  timetableObjectUrl = url.startsWith('blob:') ? url : null;
+  $('timetableImage').hidden = true;
+  $('timetableFrame').hidden = true;
+  if (type.startsWith('image/')) {
+    $('timetableImage').src = url;
+    $('timetableImage').hidden = false;
+  } else {
+    $('timetableFrame').src = url;
+    $('timetableFrame').hidden = false;
+  }
   $('timetableOpen').href = url;
   $('timetableEmpty').classList.add('hidden');
   $('timetableView').classList.remove('hidden');
 }
+async function loadSavedTimetable() {
+  $('timetableEmpty').classList.remove('hidden');
+  $('timetableView').classList.add('hidden');
+  try {
+    const file = await getTimetableFile();
+    if (file) {
+      timetableObjectUrl = URL.createObjectURL(file.blob);
+      showTimetable(timetableObjectUrl, file.type);
+      $('timetableUploadStatus').textContent = 'Gespeichert: ' + file.name;
+      return;
+    }
+    const savedUrl = localStorage.getItem(timetableStorageKey);
+    if (savedUrl) { $('timetableUrl').value = savedUrl; showTimetable(savedUrl); }
+  } catch (err) { $('timetableUploadStatus').textContent = err.message; }
+}
 $('timetableButton').addEventListener('click', () => {
   $('timetableOverlay').classList.remove('hidden');
-  const savedUrl = localStorage.getItem(timetableStorageKey);
-  if (savedUrl) { $('timetableUrl').value = savedUrl; showTimetable(savedUrl); }
+  loadSavedTimetable();
 });
 $('closeTimetable').addEventListener('click', () => $('timetableOverlay').classList.add('hidden'));
 $('timetableOverlay').addEventListener('click', event => { if (event.target === $('timetableOverlay')) $('timetableOverlay').classList.add('hidden'); });
-$('timetableForm').addEventListener('submit', event => {
+$('timetableUploadForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const input = $('timetableFile'), file = input.files[0], status = $('timetableUploadStatus');
+  status.textContent = '';
+  if (!file) return;
+  if (!['image/png', 'image/jpeg', 'image/webp', 'application/pdf'].includes(file.type)) { status.textContent = 'Bitte wähle ein Bild (PNG, JPG, WebP) oder eine PDF-Datei aus.'; return; }
+  if (file.size > 20 * 1024 * 1024) { status.textContent = 'Die Datei ist größer als 20 MB. Bitte wähle eine kleinere Datei.'; return; }
+  try {
+    await saveTimetableFile(file);
+    localStorage.removeItem(timetableStorageKey);
+    timetableObjectUrl = URL.createObjectURL(file);
+    $('timetableUrl').value = '';
+    showTimetable(timetableObjectUrl, file.type);
+    status.textContent = 'Gespeichert auf diesem Gerät: ' + file.name;
+  } catch (err) { status.textContent = err.message || 'Die Datei konnte nicht gespeichert werden.'; }
+});
+$('timetableForm').addEventListener('submit', async event => {
   event.preventDefault();
   const input = $('timetableUrl'), status = $('timetableStatus');
   status.textContent = '';
@@ -96,18 +169,20 @@ $('timetableForm').addEventListener('submit', event => {
     const url = new URL(input.value.trim());
     if (url.protocol !== 'https:' || url.hostname !== 'pwg.webuntis.com' || !/^\/WebUntis\/?$/i.test(url.pathname) || !url.hash.startsWith('#/basic/timetablePublic/')) throw new Error('Bitte füge den öffentlichen Stundenplan-Link deiner PWG-WebUntis-Seite ein.');
     const savedUrl = url.toString();
+    await deleteTimetableFile().catch(() => {});
     localStorage.setItem(timetableStorageKey, savedUrl);
     showTimetable(savedUrl);
     status.textContent = 'Gespeichert – nur auf diesem Gerät.';
   } catch (err) { status.textContent = err instanceof TypeError ? 'Bitte gib einen gültigen Link ein.' : err.message; }
 });
 $('removeTimetable').addEventListener('click', () => {
-  localStorage.removeItem(timetableStorageKey);
-  $('timetableFrame').src = 'about:blank';
-  $('timetableView').classList.add('hidden');
-  $('timetableEmpty').classList.remove('hidden');
-  $('timetableUrl').value = '';
-  $('timetableStatus').textContent = 'Der Link wurde von diesem Gerät entfernt.';
+  Promise.all([deleteTimetableFile().catch(() => {}), Promise.resolve(localStorage.removeItem(timetableStorageKey))]).then(() => {
+    if (timetableObjectUrl) { URL.revokeObjectURL(timetableObjectUrl); timetableObjectUrl = null; }
+    $('timetableFrame').src = 'about:blank'; $('timetableImage').removeAttribute('src');
+    $('timetableView').classList.add('hidden'); $('timetableEmpty').classList.remove('hidden');
+    $('timetableUrl').value = ''; $('timetableFile').value = '';
+    $('timetableStatus').textContent = ''; $('timetableUploadStatus').textContent = 'Der Stundenplan wurde von diesem Gerät entfernt.';
+  });
 });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('timetableOverlay').classList.add('hidden'); } });
 function connect(action) {
