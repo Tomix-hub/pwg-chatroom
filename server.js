@@ -25,7 +25,7 @@ const homeworkFolders = [
 const homeworkFolderIds = new Set(homeworkFolders.map(([id]) => id));
 let homework = [];
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
-let database = { users: {}, names: {} };
+let database = { users: {} };
 let friendRequests = [];
 let roomInvites = [];
 let hadStoredProfiles = false;
@@ -37,7 +37,7 @@ try {
   }
   for (const [identity, oldUser] of Object.entries(previous.users || {})) {
     if (!oldUser || typeof oldUser !== 'object') continue;
-    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [], friends: Array.isArray(oldUser.friends) ? oldUser.friends.filter(friend => /^[a-f0-9-]{36}$/i.test(friend)).slice(-500) : [], pushSubscriptions: Array.isArray(oldUser.pushSubscriptions) ? oldUser.pushSubscriptions.filter(isValidPushSubscription).slice(-5) : [] }; database.names[normName(oldUser.name)] = identity; }
+    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [], friends: Array.isArray(oldUser.friends) ? oldUser.friends.filter(friend => /^[a-f0-9-]{36}$/i.test(friend)).slice(-500) : [], pushSubscriptions: Array.isArray(oldUser.pushSubscriptions) ? oldUser.pushSubscriptions.filter(isValidPushSubscription).slice(-5) : [] }; }
   }
   friendRequests = Array.isArray(previous.friendRequests) ? previous.friendRequests.filter(request => request && /^[a-f0-9-]{36}$/i.test(request.id || '') && /^[a-f0-9-]{36}$/i.test(request.from || '') && /^[a-f0-9-]{36}$/i.test(request.to || '') && request.from !== request.to && database.users[request.from] && database.users[request.to] && typeof request.time === 'string').slice(-5000) : [];
   homework = Array.isArray(previous.homework) ? previous.homework.filter(entry => entry && typeof entry.id === 'string' && homeworkFolderIds.has(entry.folder) && typeof entry.identity === 'string' && typeof entry.name === 'string' && typeof entry.time === 'string' && (typeof entry.text === 'string' || typeof entry.image === 'string') && (!entry.image || (entry.image.length <= 650_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.image)))).map(entry => ({ ...entry, ...(typeof entry.expiresAt === 'string' && Number.isFinite(Date.parse(entry.expiresAt)) ? { expiresAt: entry.expiresAt } : {}) })).filter(entry => !entry.expiresAt || Date.parse(entry.expiresAt) > Date.now()).slice(-3000) : [];
@@ -55,7 +55,6 @@ const homeworkExpiryTimer = setInterval(removeExpiredHomework, 60_000); homework
 function removeOldRoomInvites() { const cutoff = Date.now() - 24 * 60 * 60 * 1000; roomInvites = roomInvites.filter(invite => Date.parse(invite.time) > cutoff && rooms.has(invite.code)); }
 if (hadStoredProfiles) saveDatabase();
 function cleanName(value) { return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 24); }
-function normName(value) { return cleanName(value).toLocaleLowerCase('de'); }
 function publicUser(user) { return { name: user.name, avatar: user.avatar || null }; }
 function getUser(id) { return database.users[String(id || '')]; }
 function isValidPushSubscription(subscription) {
@@ -113,8 +112,7 @@ const server = http.createServer(async (req, res) => {
       if (!/^[a-f0-9-]{36}$/i.test(identity)) return send(res, 400, { error: 'Die Geräte-ID ist ungültig. Bitte lade die Seite neu.' });
       if (name.length < 2) return send(res, 400, { error: 'Der Name muss mindestens 2 Zeichen lang sein.' });
       if (database.users[identity]) return send(res, 200, userSummary(database.users[identity]));
-      if (database.names[normName(name)]) return send(res, 409, { error: 'Dieser Name ist schon vergeben. Bitte wähle einen anderen Namen.' });
-      user = { identity, name, contacts: [], friends: [] }; database.users[identity] = user; database.names[normName(name)] = identity; saveDatabase(); return send(res, 201, userSummary(user));
+      user = { identity, name, contacts: [], friends: [] }; database.users[identity] = user; saveDatabase(); return send(res, 201, userSummary(user));
     }
     if (req.method === 'GET' && url.pathname === '/api/push/config') return send(res, 200, { enabled: Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY), publicKey: VAPID_PUBLIC_KEY || '' });
     if (!user) return send(res, 401, { error: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' });
@@ -252,12 +250,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/profile/name') {
       const name = cleanName(data.name);
       if (name.length < 2) return send(res, 400, { error: 'Der Name muss mindestens 2 Zeichen lang sein.' });
-      const normalized = normName(name), owner = database.names[normalized];
-      if (owner && owner !== user.identity) return send(res, 409, { error: 'Dieser Name ist schon vergeben. Bitte wähle einen anderen Namen.' });
       if (name !== user.name) {
-        delete database.names[normName(user.name)];
         user.name = name;
-        database.names[normalized] = user.identity;
         saveDatabase();
         for (const client of wss.clients) {
           const joined = client.joined;
