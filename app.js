@@ -140,7 +140,7 @@ $('copy').addEventListener('click', async () => {
   const url = new URL(location.href); url.search = ''; url.searchParams.set('room', roomCode); url.hash = '';
   const invite = { title: 'PWG Chatroom', text: 'Komm in meinen Chatraum. Öffne den Link und tritt mit deinem Profil bei:', url: url.toString() };
   if (navigator.share) { try { await navigator.share(invite); } catch (err) { if (err.name !== 'AbortError') renderNotice('Der Einladungslink konnte nicht geteilt werden.'); } return; }
-  try { await navigator.clipboard.writeText(url.toString()); $('copy').innerHTML = 'Link kopiert ✓'; setTimeout(() => $('copy').innerHTML = 'Link teilen <span>↗</span>', 1800); }
+  try { await navigator.clipboard.writeText(url.toString()); $('copy').innerHTML = 'Link kopiert ✓'; setTimeout(() => $('copy').innerHTML = 'Airdroppen <span>↗</span>', 1800); }
   catch { window.prompt('Teile diesen Einladungslink:', url.toString()); }
 });
 $('back').addEventListener('click', leaveRoom); $('leaveRoom').addEventListener('click', leaveRoom);
