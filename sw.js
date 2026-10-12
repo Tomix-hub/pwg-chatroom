@@ -1,13 +1,14 @@
-const CACHE_NAME = 'pwg-chatroom-shell-v20';
+const CACHE_NAME = 'pwg-chatroom-shell-v21';
 const APP_SHELL = [
   '/',
   '/index.html',
-  '/style.css?v=pastels4',
+  '/style.css?v=skyimage1',
   '/app.js?v=pastels4',
   '/manifest.webmanifest',
   '/icon-192.png',
   '/icon-512.png',
   '/pwg-logo.png',
+  '/sky-background.png',
   '/icon-512-maskable.png',
   '/apple-touch-icon.png'
 ];
