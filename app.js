@@ -10,7 +10,7 @@ const homeworkCatalog = [
   ['geschichte-erben', 'Geschichte', 'Herr Erben'], ['geschichte-kues', 'Geschichte', 'Frau Kues'], ['franzoesisch-kues', 'Französisch', 'Frau Kues'],
   ['chemie-misselwitz', 'Chemie', 'Herr Misselwitz'], ['philosophie-wenzler', 'Philosophie', 'Frau Wenzler'], ['sowi-hillebrand', 'SoWi', 'Herr Hillebrand']
 ].map(([id, subject, teacher]) => ({ id, subject, teacher }));
-let activeHomeworkFolder = null, homeworkReturnTo = 'home', homeworkRefreshTimer = null, homeworkLatestTime = '', homeworkImageData = '';
+let activeHomeworkFolder = null, homeworkReturnTo = 'home', homeworkRefreshTimer = null, homeworkLatestTime = '', homeworkImageData = '', friendRefreshTimer = null, activeOtherProfile = null;
 const ownReceipts = new Map();
 const readObserver = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting && entry.intersectionRatio >= 0.65) {
@@ -41,6 +41,35 @@ async function loadRoomContacts() {
       const action = document.createElement('span'); action.className = 'contact-whisper'; action.textContent = 'Flüstern ↗';
       button.append(avatar, label, action); button.addEventListener('click', () => openWhisper(contact.identity, contact.name)); list.append(button);
     });
+  } catch {}
+}
+function renderFriendRows(listId, entries, emptyText, actions = false) {
+  const list = $(listId); list.replaceChildren();
+  if (!entries.length) { const empty = document.createElement('p'); empty.className = 'social-empty'; empty.textContent = emptyText; list.append(empty); return; }
+  entries.forEach(entry => {
+    const row = document.createElement('div'); row.className = 'social-row';
+    const name = document.createElement('strong'); name.textContent = entry.name; row.append(name);
+    if (actions) {
+      const buttons = document.createElement('div'); buttons.className = 'social-actions';
+      const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'social-action'; accept.textContent = 'Annehmen';
+      accept.addEventListener('click', async () => { accept.disabled = true; try { await api('/api/friend-requests/' + encodeURIComponent(entry.id) + '/accept', { method: 'POST', body: JSON.stringify({}) }); $('friendStatus').textContent = 'Freundschaftsanfrage angenommen.'; await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; accept.disabled = false; } });
+      const decline = document.createElement('button'); decline.type = 'button'; decline.className = 'social-action'; decline.textContent = 'Ablehnen';
+      decline.addEventListener('click', async () => { decline.disabled = true; try { await api('/api/friend-requests/' + encodeURIComponent(entry.id), { method: 'DELETE' }); $('friendStatus').textContent = 'Anfrage abgelehnt.'; await refreshFriendData(); } catch (err) { $('friendStatus').textContent = err.message; decline.disabled = false; } });
+      buttons.append(accept, decline); row.append(buttons);
+    }
+    list.append(row);
+  });
+}
+async function refreshFriendData() {
+  if (!myProfile) return;
+  try {
+    const data = await api('/api/friends');
+    const badge = $('friendRequestBadge'); badge.textContent = data.incoming.length; badge.classList.toggle('hidden', data.incoming.length === 0);
+    if (!$('profileOverlay').classList.contains('hidden')) {
+      renderFriendRows('incomingFriendRequests', data.incoming, 'Keine neuen Anfragen.', true);
+      renderFriendRows('outgoingFriendRequests', data.outgoing, 'Keine ausstehenden Anfragen.');
+      renderFriendRows('friendsList', data.friends, 'Noch keine Freunde hinzugefügt.');
+    }
   } catch {}
 }
 function showHomeworkFolders() {
@@ -122,6 +151,7 @@ function fillProfile(profile) {
   $('profileName').textContent = profile.name; updateAvatarElement($('profileAvatar'), profile.avatar, profile.name);
   $('renameName').value = profile.name;
   loadRoomContacts();
+  refreshFriendData(); if (!friendRefreshTimer) friendRefreshTimer = setInterval(refreshFriendData, 15_000);
   connectWhisperInbox();
 }
 function updateAvatarElement(element, avatar, name) {
@@ -161,7 +191,7 @@ $('setupForm').addEventListener('submit', async event => {
     else if (savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
   } catch (err) { output.textContent = err.message; input.focus(); }
 });
-$('profileButton').addEventListener('click', () => $('profileOverlay').classList.remove('hidden'));
+$('profileButton').addEventListener('click', () => { $('profileOverlay').classList.remove('hidden'); refreshFriendData(); });
 $('homeworkButton').addEventListener('click', () => {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   homeworkReturnTo = chatWorkspace.classList.contains('hidden') ? 'home' : 'chat';
@@ -193,6 +223,15 @@ $('homeworkForm').addEventListener('submit', async event => {
   finally { button.disabled = false; }
 });
 $('closeProfile').addEventListener('click', () => $('profileOverlay').classList.add('hidden'));
+$('closeOtherProfile').addEventListener('click', () => $('otherProfileOverlay').classList.add('hidden'));
+$('otherProfileOverlay').addEventListener('click', event => { if (event.target === $('otherProfileOverlay')) $('otherProfileOverlay').classList.add('hidden'); });
+$('otherProfileWhisper').addEventListener('click', () => { const target = activeOtherProfile; $('otherProfileOverlay').classList.add('hidden'); if (target) openWhisper(target.identity, target.name); });
+$('otherProfileAddFriend').addEventListener('click', async () => {
+  if (!activeOtherProfile) return;
+  const button = $('otherProfileAddFriend'), status = $('otherProfileStatus'), target = activeOtherProfile; button.disabled = true; status.textContent = 'Wird gesendet …';
+  try { await api('/api/friend-requests', { method: 'POST', body: JSON.stringify({ identity: target.identity }) }); button.textContent = 'Anfrage gesendet'; status.textContent = 'Die Person sieht deine Anfrage beim Profil.'; await refreshFriendData(); }
+  catch (err) { status.textContent = err.message; button.disabled = false; }
+});
 $('profileOverlay').addEventListener('click', event => { if (event.target === $('profileOverlay')) $('profileOverlay').classList.add('hidden'); });
 $('renameForm').addEventListener('submit', async event => {
   event.preventDefault();
@@ -234,7 +273,7 @@ async function compressAvatar(file) {
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); } });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); } });
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
@@ -266,7 +305,7 @@ function renderMessage(msg) {
   const empty = $('messages').querySelector('.empty'); if (empty) empty.remove();  const bubble = document.createElement('article'); bubble.className = 'bubble' + (msg.name === myName ? ' mine' : '');
   if (msg.id) bubble.dataset.messageId = msg.id; if (msg.identity) bubble.dataset.identity = msg.identity; bubble._chatMessage = msg;
   const sender = document.createElement('span'); sender.className = 'sender'; const avatar = document.createElement('span'); avatar.className = 'sender-avatar'; updateAvatarElement(avatar, msg.avatar, msg.name); sender.append(avatar);
-  if (msg.identity && msg.identity !== identity) { const name = document.createElement('button'); name.className = 'sender-name'; name.type = 'button'; name.textContent = msg.name; name.title = 'Privat mit ' + msg.name + ' flüstern'; name.addEventListener('click', () => openWhisper(msg.identity, msg.name)); sender.append(name); }
+  if (msg.identity && msg.identity !== identity) { const name = document.createElement('button'); name.className = 'sender-name'; name.type = 'button'; name.textContent = msg.name; name.title = 'Profil von ' + msg.name + ' öffnen'; name.addEventListener('click', () => openOtherProfile(msg.identity, msg.name, msg.avatar)); sender.append(name); }
   else sender.append(document.createTextNode(msg.name === myName ? 'Du' : msg.name));
   bubble.append(sender);
   if (msg.type === 'image') { const image = document.createElement('img'); image.className = 'message-image'; image.src = msg.image; image.alt = 'Bild von ' + msg.name; image.loading = 'lazy'; bubble.append(image); }
@@ -284,6 +323,21 @@ function openWhisper(targetIdentity, targetName) {
   $('privateMessages').replaceChildren();
   if (inRoom) socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); else connectWhisperSocket(targetIdentity);
   $('whisperMessage').focus();
+}
+async function openOtherProfile(targetIdentity, targetName, avatar) {
+  if (!targetIdentity || targetIdentity === identity || !myProfile) return;
+  activeOtherProfile = { identity: targetIdentity, name: targetName, avatar };
+  $('otherProfileName').textContent = targetName; updateAvatarElement($('otherProfileAvatar'), avatar, targetName);
+  const button = $('otherProfileAddFriend'), status = $('otherProfileStatus'); button.disabled = true; button.textContent = 'Wird geladen …'; status.textContent = '';
+  $('otherProfileOverlay').classList.remove('hidden');
+  try {
+    const data = await api('/api/friends');
+    if (activeOtherProfile?.identity !== targetIdentity) return;
+    if (data.friends.some(friend => friend.identity === targetIdentity)) { button.textContent = 'Schon befreundet'; status.textContent = 'Ihr seid schon befreundet.'; }
+    else if (data.outgoing.some(request => request.identity === targetIdentity)) { button.textContent = 'Anfrage gesendet'; status.textContent = 'Deine Anfrage wartet noch auf eine Antwort.'; }
+    else if (data.incoming.some(request => request.identity === targetIdentity)) { button.textContent = 'Anfrage wartet auf dich'; status.textContent = 'Öffne dein Profil, um die Anfrage anzunehmen oder abzulehnen.'; }
+    else { button.textContent = 'Freundschaftsanfrage senden'; button.disabled = false; }
+  } catch (err) { if (activeOtherProfile?.identity === targetIdentity) { button.textContent = 'Freundschaftsanfrage senden'; button.disabled = false; status.textContent = err.message; } }
 }
 function closeWhisper() {
   activeWhisper = null; chatWorkspace.classList.remove('has-whisper'); $('privateChat').classList.add('hidden'); $('privateMessages').replaceChildren();

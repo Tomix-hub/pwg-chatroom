@@ -22,6 +22,7 @@ const homeworkFolderIds = new Set(homeworkFolders.map(([id]) => id));
 let homework = [];
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
 let database = { users: {}, names: {} };
+let friendRequests = [];
 let hadStoredProfiles = false;
 try {
   const previous = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -31,13 +32,14 @@ try {
   }
   for (const [identity, oldUser] of Object.entries(previous.users || {})) {
     if (!oldUser || typeof oldUser !== 'object') continue;
-    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [] }; database.names[normName(oldUser.name)] = identity; }
+    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [], friends: Array.isArray(oldUser.friends) ? oldUser.friends.filter(friend => /^[a-f0-9-]{36}$/i.test(friend)).slice(-500) : [] }; database.names[normName(oldUser.name)] = identity; }
   }
+  friendRequests = Array.isArray(previous.friendRequests) ? previous.friendRequests.filter(request => request && /^[a-f0-9-]{36}$/i.test(request.id || '') && /^[a-f0-9-]{36}$/i.test(request.from || '') && /^[a-f0-9-]{36}$/i.test(request.to || '') && request.from !== request.to && database.users[request.from] && database.users[request.to] && typeof request.time === 'string').slice(-5000) : [];
   homework = Array.isArray(previous.homework) ? previous.homework.filter(entry => entry && typeof entry.id === 'string' && homeworkFolderIds.has(entry.folder) && typeof entry.identity === 'string' && typeof entry.name === 'string' && typeof entry.time === 'string' && (typeof entry.text === 'string' || typeof entry.image === 'string') && (!entry.image || (entry.image.length <= 650_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.image)))).map(entry => ({ ...entry, ...(typeof entry.expiresAt === 'string' && Number.isFinite(Date.parse(entry.expiresAt)) ? { expiresAt: entry.expiresAt } : {}) })).filter(entry => !entry.expiresAt || Date.parse(entry.expiresAt) > Date.now()).slice(-3000) : [];
 } catch {}
 function saveDatabase() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  const temp = DATA_FILE + '.tmp'; fs.writeFileSync(temp, JSON.stringify({ ...database, whispers: Object.fromEntries(whispers), homework })); fs.renameSync(temp, DATA_FILE);
+  const temp = DATA_FILE + '.tmp'; fs.writeFileSync(temp, JSON.stringify({ ...database, whispers: Object.fromEntries(whispers), homework, friendRequests })); fs.renameSync(temp, DATA_FILE);
 }
 function removeExpiredHomework() {
   const current = Date.now(), remaining = homework.filter(entry => !entry.expiresAt || Date.parse(entry.expiresAt) > current);
@@ -93,13 +95,43 @@ const server = http.createServer(async (req, res) => {
       if (name.length < 2) return send(res, 400, { error: 'Der Name muss mindestens 2 Zeichen lang sein.' });
       if (database.users[identity]) return send(res, 200, userSummary(database.users[identity]));
       if (database.names[normName(name)]) return send(res, 409, { error: 'Dieser Name ist schon vergeben. Bitte wähle einen anderen Namen.' });
-      user = { identity, name, contacts: [] }; database.users[identity] = user; database.names[normName(name)] = identity; saveDatabase(); return send(res, 201, userSummary(user));
+      user = { identity, name, contacts: [], friends: [] }; database.users[identity] = user; database.names[normName(name)] = identity; saveDatabase(); return send(res, 201, userSummary(user));
     }
     if (!user) return send(res, 401, { error: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' });
     if (req.method === 'GET' && url.pathname === '/api/profile') return send(res, 200, userSummary(user));
     if (req.method === 'GET' && url.pathname === '/api/contacts') {
       const contacts = (user.contacts || []).map(contactId => getUser(contactId)).filter(Boolean).map(contact => ({ identity: contact.identity, ...publicUser(contact) }));
       return send(res, 200, { contacts });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/friends') {
+      const friends = (user.friends || []).map(friendId => getUser(friendId)).filter(Boolean).map(friend => ({ identity: friend.identity, ...publicUser(friend) }));
+      const incoming = friendRequests.filter(request => request.to === user.identity).map(request => ({ id: request.id, time: request.time, identity: request.from, ...publicUser(getUser(request.from)) }));
+      const outgoing = friendRequests.filter(request => request.from === user.identity).map(request => ({ id: request.id, time: request.time, identity: request.to, ...publicUser(getUser(request.to)) }));
+      return send(res, 200, { friends, incoming, outgoing });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/friend-requests') {
+      const targetId = String(data.identity || ''), target = getUser(targetId);
+      if (!target || !/^[a-f0-9-]{36}$/i.test(targetId) || targetId === user.identity) return send(res, 400, { error: 'Dieses Profil ist nicht verfügbar.' });
+      if ((user.friends || []).includes(targetId)) return send(res, 409, { error: 'Ihr seid schon befreundet.' });
+      const existing = friendRequests.find(request => (request.from === user.identity && request.to === targetId) || (request.from === targetId && request.to === user.identity));
+      if (existing) return send(res, 409, { error: existing.to === user.identity ? 'Diese Person hat dir schon eine Anfrage geschickt. Öffne dein Profil, um sie anzunehmen.' : 'Die Freundschaftsanfrage wurde schon gesendet.' });
+      const request = { id: randomUUID(), from: user.identity, to: targetId, time: new Date().toISOString() };
+      friendRequests.push(request); saveDatabase(); return send(res, 201, { sent: true });
+    }
+    if (req.method === 'POST' && /^\/api\/friend-requests\/[a-f0-9-]{36}\/accept$/i.test(url.pathname)) {
+      const requestId = url.pathname.split('/')[3], requestIndex = friendRequests.findIndex(request => request.id === requestId && request.to === user.identity);
+      if (requestIndex < 0) return send(res, 404, { error: 'Diese Anfrage ist nicht mehr verfügbar.' });
+      const request = friendRequests[requestIndex], sender = getUser(request.from);
+      user.friends ||= []; sender.friends ||= [];
+      if (!user.friends.includes(sender.identity)) user.friends.push(sender.identity);
+      if (!sender.friends.includes(user.identity)) sender.friends.push(user.identity);
+      friendRequests = friendRequests.filter(item => !((item.from === request.from && item.to === request.to) || (item.from === request.to && item.to === request.from)));
+      saveDatabase(); return send(res, 200, { accepted: true });
+    }
+    if (req.method === 'DELETE' && /^\/api\/friend-requests\/[a-f0-9-]{36}$/i.test(url.pathname)) {
+      const requestId = url.pathname.split('/')[3], requestIndex = friendRequests.findIndex(request => request.id === requestId && request.to === user.identity);
+      if (requestIndex < 0) return send(res, 404, { error: 'Diese Anfrage ist nicht mehr verfügbar.' });
+      friendRequests.splice(requestIndex, 1); saveDatabase(); return send(res, 200, { declined: true });
     }
     if (url.pathname === '/api/homework') {
       if (req.method === 'GET') {
