@@ -154,12 +154,12 @@ function renderMessage(msg) {
 function openWhisper(targetIdentity, targetName) {
   if (!targetIdentity || targetIdentity === identity || socket?.readyState !== WebSocket.OPEN) return;
   activeWhisper = { identity: targetIdentity, name: targetName };
-  $('privateChat').classList.remove('hidden'); $('privateTitle').textContent = 'Flüstern mit ' + targetName;
+  chatWorkspace.classList.add('has-whisper'); $('privateChat').classList.remove('hidden'); $('privateTitle').textContent = 'Flüstern mit ' + targetName;
   $('privateMessages').replaceChildren();
   socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); $('whisperMessage').focus();
 }
 function closeWhisper() {
-  activeWhisper = null; $('privateChat').classList.add('hidden'); $('privateMessages').replaceChildren();
+  activeWhisper = null; chatWorkspace.classList.remove('has-whisper'); $('privateChat').classList.add('hidden'); $('privateMessages').replaceChildren();
 }
 function renderWhisperEmpty() { const empty = document.createElement('div'); empty.className = 'empty'; empty.innerHTML = '<span>✉</span><strong>Flüstern beginnt hier.</strong><small>Diese Unterhaltung ist nur für euch beide sichtbar.</small>'; $('privateMessages').append(empty); }
 function renderWhisperNotice(message) { const notice = document.createElement('div'); notice.className = 'notice'; notice.textContent = message; $('privateMessages').append(notice); }
