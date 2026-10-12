@@ -81,10 +81,10 @@ body[data-theme=mint] .room-sub strong,body[data-theme=mint] .empty>span,body[da
 body[data-theme=mint] .copy,body[data-theme=mint] .profile-button,body[data-theme=mint] .theme-option{background:var(--pastel-tint);border-color:var(--pastel-line);color:var(--ink)}
 body[data-theme=mint] .bubble .text{background:var(--pastel-tint);color:var(--ink)}
 body[data-theme=mint] .theme-option[aria-pressed=true]{background:var(--pastel-accent);border-color:var(--pastel-accent);color:#fff}
-body[data-theme=lilac]{--ink:#34323b;--muted:#66636e;--paper:var(--pastel-bg);--card:#fffdf2;--green:var(--pastel-accent);--lime:var(--pastel-tint);--line:var(--pastel-line);background:var(--pastel-bg);color:var(--ink)}
+body[data-theme=lilac]{--ink:#34323b;--muted:#66636e;--paper:var(--pastel-bg);--card:#fff;--green:var(--pastel-accent);--lime:var(--pastel-tint);--line:var(--pastel-line);background:var(--pastel-bg);color:var(--ink)}
 body[data-theme=lilac] .brand h1,body[data-theme=lilac] .brand p,body[data-theme=lilac] .welcome h2,body[data-theme=lilac] .welcome>p,body[data-theme=lilac] .device-note,body[data-theme=lilac] .connection,body[data-theme=lilac] .online-pill,body[data-theme=lilac] .eyebrow,body[data-theme=lilac] .field-label{color:var(--ink)}
 body[data-theme=lilac] .online-pill,body[data-theme=lilac] .device-note{background:var(--pastel-tint);border-color:var(--pastel-line);color:var(--ink)}
-body[data-theme=lilac] .entry-card,body[data-theme=lilac] .chat-card,body[data-theme=lilac] .profile-dialog{background:#fffdf2;border-color:var(--pastel-line);box-shadow:0 14px 38px #5d566311}
+body[data-theme=lilac] .entry-card,body[data-theme=lilac] .chat-card,body[data-theme=lilac] .profile-dialog{background:#fff;border-color:var(--pastel-line);box-shadow:0 14px 38px #5d566311}
 body[data-theme=lilac] .entry-card input,body[data-theme=lilac] .composer input,body[data-theme=lilac] .profile-dialog input{background:#fff;border-color:var(--pastel-line);color:var(--ink)}
 body[data-theme=lilac] .entry-card input:focus,body[data-theme=lilac] .composer input:focus{border-color:var(--pastel-accent);box-shadow:0 0 0 3px var(--pastel-line)}
 body[data-theme=lilac] .primary,body[data-theme=lilac] .composer button,body[data-theme=lilac] .bubble.mine .text{background:var(--pastel-accent);color:#fff}
