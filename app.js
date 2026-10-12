@@ -121,7 +121,7 @@ function connect(action) {
     if (data.type === 'joined') { if (activeWhisper) closeWhisper(); roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
     if (data.type === 'message' || data.type === 'image') renderMessage(data);
     if (data.type === 'avatarUpdate') document.querySelectorAll('.bubble[data-identity="' + CSS.escape(data.identity) + '"] .sender-avatar').forEach(element => updateAvatarElement(element, data.avatar, data.name));
-    if (data.type === 'whisperHistory' && activeWhisper?.identity === data.withIdentity) {
+  if (data.type === 'whisperHistory' && activeWhisper?.identity === data.withIdentity) {
       $('privateMessages').replaceChildren();
       if (!data.messages.length) renderWhisperEmpty(); else data.messages.forEach(renderWhisperMessage);
     }
@@ -153,16 +153,13 @@ function renderMessage(msg) {
 }
 function openWhisper(targetIdentity, targetName) {
   if (!targetIdentity || targetIdentity === identity || socket?.readyState !== WebSocket.OPEN) return;
-  stopTyping(); activeWhisper = { identity: targetIdentity, name: targetName };
-  $('privateBar').classList.remove('hidden'); $('privateTitle').textContent = 'Flüstern mit ' + targetName;
-  $('messages').classList.add('hidden'); $('privateMessages').classList.remove('hidden'); $('privateMessages').replaceChildren();
-  $('chatFoot').textContent = 'Nur du und ' + targetName + ' können diese Nachrichten sehen.';
-  $('imageButton').classList.add('hidden'); $('message').placeholder = 'Private Nachricht an ' + targetName + ' …';
-  socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); $('message').focus();
+  activeWhisper = { identity: targetIdentity, name: targetName };
+  $('privateChat').classList.remove('hidden'); $('privateTitle').textContent = 'Flüstern mit ' + targetName;
+  $('privateMessages').replaceChildren();
+  socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); $('whisperMessage').focus();
 }
 function closeWhisper() {
-  activeWhisper = null; $('privateBar').classList.add('hidden'); $('privateMessages').classList.add('hidden'); $('messages').classList.remove('hidden');
-  $('chatFoot').textContent = 'Nachrichten sind für alle im Raum sichtbar.'; $('imageButton').classList.remove('hidden'); $('message').placeholder = 'Schreib eine Nachricht …';
+  activeWhisper = null; $('privateChat').classList.add('hidden'); $('privateMessages').replaceChildren();
 }
 function renderWhisperEmpty() { const empty = document.createElement('div'); empty.className = 'empty'; empty.innerHTML = '<span>✉</span><strong>Flüstern beginnt hier.</strong><small>Diese Unterhaltung ist nur für euch beide sichtbar.</small>'; $('privateMessages').append(empty); }
 function renderWhisperNotice(message) { const notice = document.createElement('div'); notice.className = 'notice'; notice.textContent = message; $('privateMessages').append(notice); }
@@ -178,7 +175,7 @@ function sendWhisper(text) { if (activeWhisper && socket?.readyState === WebSock
 $('privateBack').addEventListener('click', closeWhisper);
 function updateReadReceipt(messageId, count) { const receipt = ownReceipts.get(messageId); if (receipt) receipt.textContent = '✓✓ Gelesen' + (count > 1 ? ' (' + count + ')' : ''); }
 function renderTyping(users) { const names = (users || []).filter(name => name !== myName); const indicator = $('typingIndicator'); indicator.textContent = names.length === 0 ? '' : names.length === 1 ? names[0] + ' tippt gerade…' : names.join(', ') + ' tippen gerade…'; }
-function updateTyping() { if (activeWhisper || !socket || socket.readyState !== WebSocket.OPEN) return; if (!typingActive) { socket.send(JSON.stringify({ type: 'typing', active: true })); typingActive = true; } clearTimeout(typingTimer); typingTimer = setTimeout(() => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', active: false })); typingActive = false; }, 1400); }
+function updateTyping() { if (!socket || socket.readyState !== WebSocket.OPEN) return; if (!typingActive) { socket.send(JSON.stringify({ type: 'typing', active: true })); typingActive = true; } clearTimeout(typingTimer); typingTimer = setTimeout(() => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', active: false })); typingActive = false; }, 1400); }
 function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', active: false })); typingActive = false; }
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
@@ -189,7 +186,8 @@ $('join').addEventListener('click', () => { if (codeInput.value.trim().length !=
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6); error.textContent = ''; });
 roomNameInput.addEventListener('input', () => error.textContent = '');$('message').addEventListener('input', () => { if ($('message').value.trim()) updateTyping(); else stopTyping(); });
 $('message').addEventListener('blur', stopTyping);
-$('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { if (activeWhisper) sendWhisper(text); else { stopTyping(); socket.send(JSON.stringify({ type: 'message', text })); } input.value = ''; input.focus(); } });
+$('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { stopTyping(); socket.send(JSON.stringify({ type: 'message', text })); input.value = ''; input.focus(); } });
+$('whisperForm').addEventListener('submit', event => { event.preventDefault(); const input = $('whisperMessage'), text = input.value.trim(); if (text && activeWhisper && socket?.readyState === WebSocket.OPEN) { sendWhisper(text); input.value = ''; input.focus(); } });
 $('imageButton').addEventListener('click', () => $('imageFile').click());
 $('imageFile').addEventListener('change', async event => {
   const file = event.target.files[0]; if (!file) return;
