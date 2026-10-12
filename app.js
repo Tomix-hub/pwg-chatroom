@@ -59,11 +59,12 @@ function renderHomeworkFolders() {
   });
 }
 function renderHomeworkEntry(entry, folder) {
-  const item = document.createElement('article'); item.className = 'homework-entry';
+  const item = document.createElement('article'); item.className = 'homework-entry'; item.dataset.homeworkId = entry.id;
   const head = document.createElement('div'); head.className = 'homework-entry-head';
   const author = document.createElement('strong'); author.textContent = entry.name;
   const time = document.createElement('time'); const date = new Date(entry.time); time.dateTime = entry.time; time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
   head.append(author, time); item.append(head);
+  if (entry.expiresAt) { const expiry = document.createElement('small'); expiry.className = 'homework-expiry'; expiry.textContent = 'Wird gelöscht am ' + new Date(entry.expiresAt).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }); item.append(expiry); }
   if (entry.text) { const text = document.createElement('p'); text.className = 'homework-entry-text'; text.textContent = entry.text; item.append(text); }
   if (entry.image) {
     const image = document.createElement('img'); image.className = 'homework-entry-image'; image.src = entry.image; image.alt = 'Geteiltes Bild von ' + entry.name; image.loading = 'lazy'; item.append(image);
@@ -78,7 +79,21 @@ function renderHomeworkEntry(entry, folder) {
       finally { save.disabled = false; }
     }); item.append(save);
   }
+  if (entry.isMine) {
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'homework-delete'; remove.textContent = 'Beitrag löschen';
+    remove.addEventListener('click', async () => {
+      if (!window.confirm('Diesen eigenen Beitrag wirklich löschen?')) return;
+      remove.disabled = true;
+      try { await api('/api/homework/' + encodeURIComponent(entry.id), { method: 'DELETE' }); item.remove(); showEmptyHomeworkFolder(); $('homeworkStatus').textContent = 'Beitrag gelöscht.'; }
+      catch (err) { remove.disabled = false; $('homeworkStatus').textContent = err.message || 'Der Beitrag konnte nicht gelöscht werden.'; }
+    }); item.append(remove);
+  }
   $('homeworkEntries').append(item);
+}
+function showEmptyHomeworkFolder() {
+  const list = $('homeworkEntries');
+  if (list.querySelector('.homework-entry') || list.querySelector('.homework-empty')) return;
+  const empty = document.createElement('p'); empty.className = 'homework-empty'; empty.textContent = 'Hier gibt es noch keine Beiträge. Teile den ersten!'; list.append(empty);
 }
 async function loadHomeworkEntries(folder, append = false) {
   const list = $('homeworkEntries');
@@ -86,13 +101,15 @@ async function loadHomeworkEntries(folder, append = false) {
   try {
     const query = new URLSearchParams({ folder: folder.id }); if (append && homeworkLatestTime) query.set('after', homeworkLatestTime);
     const data = await api('/api/homework?' + query.toString());
-    if (!append && data.entries.length === 0) { const empty = document.createElement('p'); empty.className = 'homework-empty'; empty.textContent = 'Hier gibt es noch keine Beiträge. Teile den ersten!'; list.append(empty); }
+    if (append) list.querySelectorAll('.homework-entry').forEach(item => { if (!data.activeIds.includes(item.dataset.homeworkId)) item.remove(); });
     data.entries.forEach(entry => { list.querySelector('.homework-empty')?.remove(); renderHomeworkEntry(entry, folder); if (entry.time > homeworkLatestTime) homeworkLatestTime = entry.time; });
+    if (!data.entries.length) showEmptyHomeworkFolder();
   } catch (err) { if (!append) { const message = document.createElement('p'); message.className = 'homework-empty'; message.textContent = err.message || 'Die Beiträge konnten nicht geladen werden.'; list.replaceChildren(message); } }
 }
 function openHomeworkFolder(folder) {
   activeHomeworkFolder = folder; homeworkLatestTime = ''; $('homeworkFolders').classList.add('hidden'); $('homeworkFolderView').classList.remove('hidden');
-  $('homeworkFolderTitle').textContent = folder.subject; $('homeworkFolderTeacher').textContent = 'bei ' + folder.teacher; $('homeworkText').value = ''; $('homeworkStatus').textContent = ''; $('homeworkImageName').textContent = ''; $('homeworkImage').value = '';
+  const expiry = new Date(Date.now() + 60_000); expiry.setSeconds(0, 0); $('homeworkExpiresAt').min = new Date(expiry.getTime() - expiry.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  $('homeworkFolderTitle').textContent = folder.subject; $('homeworkFolderTeacher').textContent = 'bei ' + folder.teacher; $('homeworkText').value = ''; $('homeworkExpiresAt').value = ''; $('homeworkStatus').textContent = ''; $('homeworkImageName').textContent = ''; $('homeworkImage').value = ''; homeworkImageData = '';
   loadHomeworkEntries(folder); if (homeworkRefreshTimer) clearInterval(homeworkRefreshTimer); homeworkRefreshTimer = setInterval(() => { if (activeHomeworkFolder?.id === folder.id) loadHomeworkEntries(folder, true); }, 10_000);
 }
 function closeHomework() {
@@ -164,12 +181,14 @@ $('homeworkImage').addEventListener('change', async event => {
 $('homeworkForm').addEventListener('submit', async event => {
   event.preventDefault(); const text = $('homeworkText').value.trim(), status = $('homeworkStatus'), button = $('homeworkSubmit');
   if (!activeHomeworkFolder || (!text && !homeworkImageData)) { status.textContent = 'Schreibe etwas oder wähle ein Bild aus.'; return; }
+  const expiryInput = $('homeworkExpiresAt').value, expiryDate = expiryInput ? new Date(expiryInput) : null;
+  if (expiryDate && expiryDate.getTime() <= Date.now()) { status.textContent = 'Das Löschdatum muss in der Zukunft liegen.'; $('homeworkExpiresAt').focus(); return; }
   button.disabled = true; status.textContent = 'Wird geteilt …';
   try {
-    const data = await api('/api/homework', { method: 'POST', body: JSON.stringify({ folder: activeHomeworkFolder.id, text, image: homeworkImageData }) });
+    const data = await api('/api/homework', { method: 'POST', body: JSON.stringify({ folder: activeHomeworkFolder.id, text, image: homeworkImageData, expiresAt: expiryDate ? expiryDate.toISOString() : '' }) });
     $('homeworkEntries').querySelector('.homework-empty')?.remove(); renderHomeworkEntry(data.entry, activeHomeworkFolder);
     if (data.entry.time > homeworkLatestTime) homeworkLatestTime = data.entry.time;
-    $('homeworkText').value = ''; $('homeworkImage').value = ''; $('homeworkImageName').textContent = ''; homeworkImageData = ''; status.textContent = 'Beitrag wurde geteilt.';
+    $('homeworkText').value = ''; $('homeworkExpiresAt').value = ''; $('homeworkImage').value = ''; $('homeworkImageName').textContent = ''; homeworkImageData = ''; status.textContent = 'Beitrag wurde geteilt.';
   } catch (err) { status.textContent = err.message || 'Der Beitrag konnte nicht geteilt werden.'; }
   finally { button.disabled = false; }
 });

@@ -33,12 +33,18 @@ try {
     if (!oldUser || typeof oldUser !== 'object') continue;
     if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [] }; database.names[normName(oldUser.name)] = identity; }
   }
-  homework = Array.isArray(previous.homework) ? previous.homework.filter(entry => entry && typeof entry.id === 'string' && homeworkFolderIds.has(entry.folder) && typeof entry.identity === 'string' && typeof entry.name === 'string' && typeof entry.time === 'string' && (typeof entry.text === 'string' || typeof entry.image === 'string') && (!entry.image || (entry.image.length <= 650_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.image)))).slice(-3000) : [];
+  homework = Array.isArray(previous.homework) ? previous.homework.filter(entry => entry && typeof entry.id === 'string' && homeworkFolderIds.has(entry.folder) && typeof entry.identity === 'string' && typeof entry.name === 'string' && typeof entry.time === 'string' && (typeof entry.text === 'string' || typeof entry.image === 'string') && (!entry.image || (entry.image.length <= 650_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.image)))).map(entry => ({ ...entry, ...(typeof entry.expiresAt === 'string' && Number.isFinite(Date.parse(entry.expiresAt)) ? { expiresAt: entry.expiresAt } : {}) })).filter(entry => !entry.expiresAt || Date.parse(entry.expiresAt) > Date.now()).slice(-3000) : [];
 } catch {}
 function saveDatabase() {
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
   const temp = DATA_FILE + '.tmp'; fs.writeFileSync(temp, JSON.stringify({ ...database, whispers: Object.fromEntries(whispers), homework })); fs.renameSync(temp, DATA_FILE);
 }
+function removeExpiredHomework() {
+  const current = Date.now(), remaining = homework.filter(entry => !entry.expiresAt || Date.parse(entry.expiresAt) > current);
+  if (remaining.length === homework.length) return false;
+  homework = remaining; saveDatabase(); return true;
+}
+const homeworkExpiryTimer = setInterval(removeExpiredHomework, 60_000); homeworkExpiryTimer.unref?.();
 if (hadStoredProfiles) saveDatabase();
 function cleanName(value) { return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 24); }
 function normName(value) { return cleanName(value).toLocaleLowerCase('de'); }
@@ -99,8 +105,10 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET') {
         const folder = String(url.searchParams.get('folder') || '');
         if (!homeworkFolderIds.has(folder)) return send(res, 400, { error: 'Dieses Fach gibt es nicht.' });
+        removeExpiredHomework();
         const after = String(url.searchParams.get('after') || '');
-        return send(res, 200, { entries: homework.filter(entry => entry.folder === folder && (!after || entry.time > after)).map(({ identity, ...entry }) => entry) });
+        const folderEntries = homework.filter(entry => entry.folder === folder);
+        return send(res, 200, { activeIds: folderEntries.map(entry => entry.id), entries: folderEntries.filter(entry => !after || entry.time > after).map(({ identity, ...entry }) => ({ ...entry, isMine: identity === user.identity })) });
       }
       if (req.method === 'POST') {
         const folder = String(data.folder || ''), text = String(data.text || '').trim().slice(0, 2000), image = String(data.image || '');
@@ -110,10 +118,18 @@ const server = http.createServer(async (req, res) => {
         if (homework.filter(entry => entry.folder === folder).length >= 300) return send(res, 413, { error: 'In diesem Fach sind schon sehr viele Beiträge gespeichert.' });
         const storedImageChars = homework.reduce((total, entry) => total + (entry.image?.length || 0), 0);
         if (image && storedImageChars + image.length > 25_000_000) return send(res, 413, { error: 'Der gemeinsame Bildspeicher ist voll. Bitte speichere ältere Bilder auf deinem Gerät.' });
-        const entry = { id: randomUUID(), folder, identity: user.identity, name: user.name, text, ...(image ? { image } : {}), time: new Date().toISOString() };
+        const expiresAtInput = String(data.expiresAt || ''), expiresAtTime = expiresAtInput ? Date.parse(expiresAtInput) : NaN;
+        if (expiresAtInput && (!Number.isFinite(expiresAtTime) || expiresAtTime <= Date.now())) return send(res, 400, { error: 'Das Löschdatum muss in der Zukunft liegen.' });
+        const entry = { id: randomUUID(), folder, identity: user.identity, name: user.name, text, ...(image ? { image } : {}), ...(expiresAtInput ? { expiresAt: new Date(expiresAtTime).toISOString() } : {}), time: new Date().toISOString() };
         homework.push(entry); if (homework.length > 3000) homework.splice(0, homework.length - 3000);
-        saveDatabase(); const { identity, ...publicEntry } = entry; return send(res, 201, { entry: publicEntry });
+        saveDatabase(); const { identity, ...publicEntry } = entry; return send(res, 201, { entry: { ...publicEntry, isMine: true } });
       }
+    }
+    if (req.method === 'DELETE' && /^\/api\/homework\/[a-f0-9-]{36}$/i.test(url.pathname)) {
+      const entryId = url.pathname.slice('/api/homework/'.length), index = homework.findIndex(entry => entry.id === entryId);
+      if (index < 0) return send(res, 404, { error: 'Dieser Beitrag wurde schon gelöscht.' });
+      if (homework[index].identity !== user.identity) return send(res, 403, { error: 'Du kannst nur deine eigenen Beiträge löschen.' });
+      homework.splice(index, 1); saveDatabase(); return send(res, 200, { deleted: true, id: entryId });
     }
     if (req.method === 'POST' && url.pathname === '/api/profile/avatar') {
       const avatar = String(data.avatar || '');
