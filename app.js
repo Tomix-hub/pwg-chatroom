@@ -160,3 +160,32 @@ function setTheme(theme) {
 }
 setTheme(localStorage.getItem('pwgChatTheme') || 'gold');
 document.querySelectorAll('[data-theme-choice]').forEach(button => button.addEventListener('click', () => setTheme(button.dataset.themeChoice)));
+const installButton = $('installButton');
+const installOverlay = $('installOverlay');
+let deferredInstallPrompt = null;
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function refreshInstallButton() { installButton.hidden = isStandalone(); }
+window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferredInstallPrompt = event; refreshInstallButton(); });
+window.addEventListener('appinstalled', () => { deferredInstallPrompt = null; refreshInstallButton(); });
+installButton.addEventListener('click', async () => {
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    const result = await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    if (result.outcome === 'accepted') refreshInstallButton();
+    return;
+  }
+  const instructions = $('installInstructions');
+  const ua = navigator.userAgent;
+  const isAppleMobile = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isAppleMobile) instructions.textContent = 'Tippe in Safari auf „Teilen“ (das Quadrat mit dem Pfeil nach oben). Wähle „Zum Home-Bildschirm“ und tippe anschließend auf „Hinzufügen“.';
+  else if (/Android/i.test(ua)) instructions.textContent = 'Öffne das Browser-Menü ⋮ und wähle „App installieren“ oder „Zum Startbildschirm hinzufügen“. In Chrome kann auch direkt eine Installieren-Abfrage erscheinen.';
+  else instructions.textContent = 'Öffne das Menü deines Browsers und wähle „PWG Chatroom installieren“. In Chrome oder Edge kannst du auch das Installationssymbol rechts in der Adressleiste anklicken.';
+  installOverlay.classList.remove('hidden');
+});
+$('closeInstall').addEventListener('click', () => installOverlay.classList.add('hidden'));
+$('installDone').addEventListener('click', () => installOverlay.classList.add('hidden'));
+installOverlay.addEventListener('click', event => { if (event.target === installOverlay) installOverlay.classList.add('hidden'); });
+refreshInstallButton();
+
+document.addEventListener('keydown', event => { if (event.key === 'Escape') installOverlay.classList.add('hidden'); });
