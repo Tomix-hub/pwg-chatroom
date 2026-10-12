@@ -61,6 +61,39 @@ async function toggleNotifications() {
   } catch (err) { status.textContent = err.message || 'Mitteilungen konnten nicht geändert werden.'; }
   await updateNotificationControls();
 }
+async function enableNotifications() {
+  const permissionPromise = Notification.permission === 'default' ? Notification.requestPermission() : Promise.resolve(Notification.permission);
+  const [config, permission] = await Promise.all([api('/api/push/config'), permissionPromise]);
+  if (!config.enabled) throw new Error('Push-Mitteilungen sind noch nicht auf dem Server eingerichtet.');
+  const registration = await navigator.serviceWorker.ready; let subscription = await registration.pushManager.getSubscription();
+  if (permission !== 'granted') throw new Error('Mitteilungen wurden im Browser nicht erlaubt. Du kannst sie später im Profil aktivieren.');
+  if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodePushKey(config.publicKey) });
+  await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: subscription.toJSON() }) });
+}
+async function askForNotificationsOnce() {
+  if (!myProfile || localStorage.getItem('pwgNotificationChoice')) return;
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const config = await api('/api/push/config');
+    if (!config.enabled) return;
+    const registration = await navigator.serviceWorker.ready;
+    if (await registration.pushManager.getSubscription()) { localStorage.setItem('pwgNotificationChoice', 'yes'); return; }
+    $('notificationPrompt').classList.remove('hidden');
+  } catch {}
+}
+$('notificationPromptNo').addEventListener('click', () => {
+  localStorage.setItem('pwgNotificationChoice', 'no'); $('notificationPrompt').classList.add('hidden');
+});
+$('notificationPromptYes').addEventListener('click', async () => {
+  const button = $('notificationPromptYes'), status = $('notificationPromptStatus'); button.disabled = true; status.textContent = 'Mitteilungen werden eingerichtet …';
+  try {
+    await enableNotifications(); localStorage.setItem('pwgNotificationChoice', 'yes');
+    $('notificationPrompt').classList.add('hidden'); await updateNotificationControls();
+  } catch (err) {
+    status.textContent = err.message || 'Mitteilungen konnten nicht eingerichtet werden.';
+    if (window.Notification?.permission === 'denied') { localStorage.setItem('pwgNotificationChoice', 'no'); $('notificationPrompt').classList.add('hidden'); }
+  } finally { button.disabled = false; }
+});
 async function loadRoomContacts() {
   if (!myProfile) return;
   try {
@@ -283,6 +316,7 @@ $('setupForm').addEventListener('submit', async event => {
     if (notificationInviteId) await joinRoomFromNotification();
     else if (hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
     else if (savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
+    askForNotificationsOnce();
   } catch (err) { output.textContent = err.message; input.focus(); }
 });
 $('profileButton').addEventListener('click', () => { $('profileOverlay').classList.remove('hidden'); refreshFriendData(); });
@@ -542,7 +576,7 @@ $('copy').addEventListener('click', async () => {
 $('back').addEventListener('click', leaveRoom); $('leaveRoom').addEventListener('click', leaveRoom);
 if (hasInviteCode) codeInput.value = inviteCode;
 loadProfile().then(() => {
-  if (myProfile && notificationInviteId) { joinRoomFromNotification(); return; }
+  if (myProfile && notificationInviteId) { joinRoomFromNotification(); askForNotificationsOnce(); return; }
   if (myProfile && hasInviteCode) connect('join'); else if (myProfile && savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
   if (!myProfile) return;
   const destination = new URLSearchParams(location.search), open = destination.get('open');
@@ -552,6 +586,7 @@ loadProfile().then(() => {
     const folder = homeworkCatalog.find(item => item.id === destination.get('folder'));
     if (folder) openHomeworkFolder(folder);
   }
+  askForNotificationsOnce();
 });
 
 
