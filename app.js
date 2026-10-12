@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const home = $('home'), chat = $('chat'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer;
+const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer;
 const ownReceipts = new Map();
 const readObserver = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting && entry.intersectionRatio >= 0.65) {
@@ -123,6 +123,33 @@ function showTimetable(url, type = 'application/pdf') {
   $('timetableOpen').href = url;
   $('timetableEmpty').classList.add('hidden');
   $('timetableView').classList.remove('hidden');
+  renderRoomTimetable();
+}
+let roomTimetableObjectUrl = null;
+async function renderRoomTimetable() {
+  if (roomTimetableObjectUrl) { URL.revokeObjectURL(roomTimetableObjectUrl); roomTimetableObjectUrl = null; }
+  $('roomTimetableImage').hidden = true;
+  $('roomTimetableFrame').hidden = true;
+  $('roomTimetableContent').classList.add('hidden');
+  $('roomTimetableEmpty').classList.remove('hidden');
+  try {
+    const file = await getTimetableFile();
+    if (file) {
+      roomTimetableObjectUrl = URL.createObjectURL(file.blob);
+      if (file.type.startsWith('image/')) { $('roomTimetableImage').src = roomTimetableObjectUrl; $('roomTimetableImage').hidden = false; }
+      else { $('roomTimetableFrame').src = roomTimetableObjectUrl; $('roomTimetableFrame').hidden = false; }
+      $('roomTimetableEmpty').classList.add('hidden');
+      $('roomTimetableContent').classList.remove('hidden');
+      return;
+    }
+    const savedUrl = localStorage.getItem(timetableStorageKey);
+    if (savedUrl) {
+      $('roomTimetableFrame').src = savedUrl;
+      $('roomTimetableFrame').hidden = false;
+      $('roomTimetableEmpty').classList.add('hidden');
+      $('roomTimetableContent').classList.remove('hidden');
+    }
+  } catch {}
 }
 async function loadSavedTimetable() {
   $('timetableEmpty').classList.remove('hidden');
@@ -143,6 +170,8 @@ $('timetableButton').addEventListener('click', () => {
   $('timetableOverlay').classList.remove('hidden');
   loadSavedTimetable();
 });
+$('editRoomTimetable').addEventListener('click', () => $('timetableButton').click());
+$('addRoomTimetable').addEventListener('click', () => $('timetableButton').click());
 $('closeTimetable').addEventListener('click', () => $('timetableOverlay').classList.add('hidden'));
 $('timetableOverlay').addEventListener('click', event => { if (event.target === $('timetableOverlay')) $('timetableOverlay').classList.add('hidden'); });
 $('timetableUploadForm').addEventListener('submit', async event => {
@@ -182,6 +211,7 @@ $('removeTimetable').addEventListener('click', () => {
     $('timetableView').classList.add('hidden'); $('timetableEmpty').classList.remove('hidden');
     $('timetableUrl').value = ''; $('timetableFile').value = '';
     $('timetableStatus').textContent = ''; $('timetableUploadStatus').textContent = 'Der Stundenplan wurde von diesem Gerät entfernt.';
+    renderRoomTimetable();
   });
 });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('timetableOverlay').classList.add('hidden'); } });
@@ -199,7 +229,7 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
+    if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); renderRoomTimetable(); updateConnection(true); }
     if (data.type === 'message' || data.type === 'image') renderMessage(data);    if (data.type === 'notice') renderNotice(data.text);
     if (data.type === 'typing') renderTyping(data.users);
     if (data.type === 'readReceipt') updateReadReceipt(data.messageId, data.count);
@@ -224,7 +254,7 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { clearRoomSession(); if (socket) socket.close(); chat.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; }
+function leaveRoom() { clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; }
 $('create').addEventListener('click', () => connect('create'));
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Zeichen.'; codeInput.focus(); return; } connect('join'); });
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); error.textContent = ''; });
