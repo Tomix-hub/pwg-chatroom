@@ -53,6 +53,29 @@ const server = http.createServer(async (req, res) => {
     }
     if (!user) return send(res, 401, { error: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' });
     if (req.method === 'GET' && url.pathname === '/api/profile') return send(res, 200, userSummary(user));
+    if (req.method === 'POST' && url.pathname === '/api/profile/name') {
+      const name = cleanName(data.name);
+      if (name.length < 2) return send(res, 400, { error: 'Der Name muss mindestens 2 Zeichen lang sein.' });
+      const normalized = normName(name), owner = database.names[normalized];
+      if (owner && owner !== user.identity) return send(res, 409, { error: 'Dieser Name ist schon vergeben. Bitte wähle einen anderen Namen.' });
+      if (name !== user.name) {
+        delete database.names[normName(user.name)];
+        user.name = name;
+        database.names[normalized] = user.identity;
+        saveDatabase();
+        for (const client of wss.clients) {
+          const joined = client.joined;
+          if (!joined || joined.identity !== user.identity) continue;
+          joined.name = name;
+          const room = rooms.get(joined.code);
+          if (room?.typing.has(user.identity)) {
+            room.typing.set(user.identity, name);
+            broadcast(room, { type: 'typing', users: [...room.typing].filter(([identity]) => identity !== user.identity).map(([, typingName]) => typingName) });
+          }
+        }
+      }
+      return send(res, 200, userSummary(user));
+    }
     return send(res, 404, { error: 'Unbekannte Anfrage.' });
   }
   const pathname = decodeURIComponent(url.pathname);
@@ -76,7 +99,7 @@ wss.on('connection', (socket) => {
         const code = String(data.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
         if (!/^[A-Z0-9]{6}$/.test(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode ein.' }));
         if (!rooms.has(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Diesen Raum gibt es nicht. Prüfe den Code.' }));
-        joined = { code, identity: user.identity, name };
+        joined = { code, identity: user.identity, name }; socket.joined = joined;
         const room = rooms.get(code); room.clients.add(socket);
         socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history })); broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
       } else {
@@ -84,7 +107,7 @@ wss.on('connection', (socket) => {
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
         let code; do { code = randomInt(0, 36 ** 6).toString(36).toUpperCase().padStart(6, '0'); } while (rooms.has(code));
         rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
-        joined = { code, identity: user.identity, name }; const room = rooms.get(code); room.clients.add(socket);
+        joined = { code, identity: user.identity, name }; socket.joined = joined; const room = rooms.get(code); room.clients.add(socket);
         socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] })); broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
       }
     } else if (data.type === 'message' && joined) {

@@ -21,6 +21,7 @@ async function api(url, options = {}) {
 function fillProfile(profile) {
   myProfile = profile; myName = profile.name; nameInput.value = myName; localStorage.setItem('pwgChatName', myName);
   $('profileName').textContent = profile.name; $('profileAvatar').textContent = profile.name.trim().charAt(0).toLocaleUpperCase();
+  $('renameName').value = profile.name;
 }
 async function loadProfile() {
   try { const data = await api('/api/profile'); fillProfile(data.profile); }
@@ -57,6 +58,19 @@ $('setupForm').addEventListener('submit', async event => {
 $('profileButton').addEventListener('click', () => $('profileOverlay').classList.remove('hidden'));
 $('closeProfile').addEventListener('click', () => $('profileOverlay').classList.add('hidden'));
 $('profileOverlay').addEventListener('click', event => { if (event.target === $('profileOverlay')) $('profileOverlay').classList.add('hidden'); });
+$('renameForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const input = $('renameName'), status = $('renameStatus'), newName = input.value.trim();
+  status.textContent = '';
+  try {
+    const data = await api('/api/profile/name', { method: 'POST', body: JSON.stringify({ name: newName }) });
+    fillProfile(data.profile);
+    status.textContent = 'Dein Name wurde gespeichert.';
+  } catch (err) {
+    status.textContent = err.message;
+    input.focus();
+  }
+});
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });

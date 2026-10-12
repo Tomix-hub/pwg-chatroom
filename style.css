@@ -34,3 +34,6 @@ body[data-theme=stone]{--ink:#fff;--muted:#f0e8db;--paper:#8d7659;--card:#30271d
 .design-button{padding-inline:12px}.design-dialog .theme-options{margin-top:20px}.design-dialog .theme-option{min-height:48px}.design-dialog .theme-status{margin-top:14px}
 @media(max-width:760px){.brand{flex-wrap:wrap}.brand .online-pill{margin-left:auto}.brand .profile-button{padding:8px 10px}}
 @media(max-width:390px){.brand{gap:7px}.brand .online-pill{padding:7px}.brand .profile-button{padding:8px;font-size:11px}}
+
+/* Profilnamen ändern */
+.rename-form{margin-top:20px;text-align:left}.rename-form .field-label{margin-bottom:8px}.rename-form input{display:block}.rename-status{min-height:16px;margin:8px 0 0;color:#d5b66a;font-size:12px;text-align:left}.rename-status:empty{display:none}body[data-theme=light] .rename-status{color:#333}body[data-theme=stone] .rename-status{color:#fff}
