@@ -74,7 +74,42 @@ $('renameForm').addEventListener('submit', async event => {
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); } });
+const timetableStorageKey = 'pwgPersonalTimetableUrl';
+function showTimetable(url) {
+  $('timetableFrame').src = url;
+  $('timetableOpen').href = url;
+  $('timetableEmpty').classList.add('hidden');
+  $('timetableView').classList.remove('hidden');
+}
+$('timetableButton').addEventListener('click', () => {
+  $('timetableOverlay').classList.remove('hidden');
+  const savedUrl = localStorage.getItem(timetableStorageKey);
+  if (savedUrl) { $('timetableUrl').value = savedUrl; showTimetable(savedUrl); }
+});
+$('closeTimetable').addEventListener('click', () => $('timetableOverlay').classList.add('hidden'));
+$('timetableOverlay').addEventListener('click', event => { if (event.target === $('timetableOverlay')) $('timetableOverlay').classList.add('hidden'); });
+$('timetableForm').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = $('timetableUrl'), status = $('timetableStatus');
+  status.textContent = '';
+  try {
+    const url = new URL(input.value.trim());
+    if (url.protocol !== 'https:' || url.hostname !== 'pwg.webuntis.com' || !/^\/WebUntis\/?$/i.test(url.pathname) || !url.hash.startsWith('#/basic/timetablePublic/')) throw new Error('Bitte füge den öffentlichen Stundenplan-Link deiner PWG-WebUntis-Seite ein.');
+    const savedUrl = url.toString();
+    localStorage.setItem(timetableStorageKey, savedUrl);
+    showTimetable(savedUrl);
+    status.textContent = 'Gespeichert – nur auf diesem Gerät.';
+  } catch (err) { status.textContent = err instanceof TypeError ? 'Bitte gib einen gültigen Link ein.' : err.message; }
+});
+$('removeTimetable').addEventListener('click', () => {
+  localStorage.removeItem(timetableStorageKey);
+  $('timetableFrame').src = 'about:blank';
+  $('timetableView').classList.add('hidden');
+  $('timetableEmpty').classList.remove('hidden');
+  $('timetableUrl').value = '';
+  $('timetableStatus').textContent = 'Der Link wurde von diesem Gerät entfernt.';
+});
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('timetableOverlay').classList.add('hidden'); } });
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
