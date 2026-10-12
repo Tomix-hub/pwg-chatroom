@@ -29,6 +29,37 @@ async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', 'X-PWG-Identity': identity, ...(options.headers || {}) } });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Die Anfrage ist fehlgeschlagen.'); return result;
 }
+function decodePushKey(value) { const padded = (value + '='.repeat((4 - value.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(padded), char => char.charCodeAt(0)); }
+async function updateNotificationControls() {
+  const button = $('notificationsButton'), status = $('notificationStatus');
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) { status.textContent = 'Dieser Browser unterstützt keine Push-Mitteilungen. Auf dem iPad PWG Chatroom zum Home-Bildschirm hinzufügen.'; button.disabled = true; return; }
+  try {
+    const config = await api('/api/push/config');
+    if (!config.enabled) { status.textContent = 'Push-Mitteilungen werden gerade für den Server eingerichtet.'; button.disabled = true; return; }
+    const registration = await navigator.serviceWorker.ready, subscription = await registration.pushManager.getSubscription();
+    if (Notification.permission === 'denied') { status.textContent = 'Mitteilungen sind in den Browser-Einstellungen blockiert.'; button.textContent = 'Browser-Einstellungen öffnen'; button.disabled = true; }
+    else if (subscription) { status.textContent = 'Mitteilungen sind auf diesem Gerät eingeschaltet.'; button.textContent = 'Mitteilungen ausschalten'; button.disabled = false; }
+    else { status.textContent = 'Du wirst über Nachrichten, Freundschaftsanfragen, Raumeinladungen und neue Hausaufgaben informiert.'; button.textContent = 'Benachrichtigungen einschalten'; button.disabled = false; }
+  } catch { status.textContent = 'Mitteilungseinstellungen konnten nicht geladen werden.'; button.disabled = true; }
+}
+async function toggleNotifications() {
+  const button = $('notificationsButton'), status = $('notificationStatus'); button.disabled = true;
+  try {
+    const config = await api('/api/push/config'); if (!config.enabled) throw new Error('Push-Mitteilungen sind noch nicht auf dem Server eingerichtet.');
+    const registration = await navigator.serviceWorker.ready; let subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      await api('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint: subscription.endpoint }) });
+      await subscription.unsubscribe(); status.textContent = 'Mitteilungen wurden ausgeschaltet.';
+    } else {
+      const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+      if (permission !== 'granted') throw new Error('Bitte erlaube Mitteilungen in den Browser-Einstellungen.');
+      subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodePushKey(config.publicKey) });
+      await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: subscription.toJSON() }) });
+      status.textContent = 'Mitteilungen sind auf diesem Gerät eingeschaltet.';
+    }
+  } catch (err) { status.textContent = err.message || 'Mitteilungen konnten nicht geändert werden.'; }
+  await updateNotificationControls();
+}
 async function loadRoomContacts() {
   if (!myProfile) return;
   try {
@@ -196,6 +227,7 @@ function fillProfile(profile) {
   $('renameName').value = profile.name;
   loadRoomContacts();
   refreshFriendData(); if (!friendRefreshTimer) friendRefreshTimer = setInterval(refreshFriendData, 15_000);
+  updateNotificationControls();
   connectWhisperInbox();
 }
 function updateAvatarElement(element, avatar, name) {
@@ -236,6 +268,7 @@ $('setupForm').addEventListener('submit', async event => {
   } catch (err) { output.textContent = err.message; input.focus(); }
 });
 $('profileButton').addEventListener('click', () => { $('profileOverlay').classList.remove('hidden'); refreshFriendData(); });
+$('notificationsButton').addEventListener('click', toggleNotifications);
 $('inviteFriends').addEventListener('click', openRoomInviteDialog);
 $('closeRoomInvite').addEventListener('click', () => $('roomInviteOverlay').classList.add('hidden'));
 $('roomInviteOverlay').addEventListener('click', event => { if (event.target === $('roomInviteOverlay')) $('roomInviteOverlay').classList.add('hidden'); });
@@ -490,7 +523,17 @@ $('copy').addEventListener('click', async () => {
 });
 $('back').addEventListener('click', leaveRoom); $('leaveRoom').addEventListener('click', leaveRoom);
 if (hasInviteCode) codeInput.value = inviteCode;
-loadProfile().then(() => { if (myProfile && hasInviteCode) connect('join'); else if (myProfile && savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); } });
+loadProfile().then(() => {
+  if (myProfile && hasInviteCode) connect('join'); else if (myProfile && savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
+  if (!myProfile) return;
+  const destination = new URLSearchParams(location.search), open = destination.get('open');
+  if (open === 'profile') { $('profileOverlay').classList.remove('hidden'); refreshFriendData(); }
+  if (open === 'homework') {
+    $('homeworkButton').click();
+    const folder = homeworkCatalog.find(item => item.id === destination.get('folder'));
+    if (folder) openHomeworkFolder(folder);
+  }
+});
 
 
 function setTheme(theme) {

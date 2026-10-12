@@ -3,9 +3,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomInt, randomUUID } = require('node:crypto');
 const { WebSocketServer } = require('ws');
+const webpush = require('web-push');
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
+const VAPID_PUBLIC_KEY = String(process.env.VAPID_PUBLIC_KEY || '');
+const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || '');
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@pwg-chatroom.onrender.com', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 const rooms = new Map();
 const whispers = new Map();
 const homeworkFolders = [
@@ -33,7 +37,7 @@ try {
   }
   for (const [identity, oldUser] of Object.entries(previous.users || {})) {
     if (!oldUser || typeof oldUser !== 'object') continue;
-    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [], friends: Array.isArray(oldUser.friends) ? oldUser.friends.filter(friend => /^[a-f0-9-]{36}$/i.test(friend)).slice(-500) : [] }; database.names[normName(oldUser.name)] = identity; }
+    if (oldUser.name) { database.users[identity] = { identity, name: oldUser.name, ...(typeof oldUser.avatar === 'string' ? { avatar: oldUser.avatar } : {}), contacts: Array.isArray(oldUser.contacts) ? oldUser.contacts.filter(contact => /^[a-f0-9-]{36}$/i.test(contact)).slice(-100) : [], friends: Array.isArray(oldUser.friends) ? oldUser.friends.filter(friend => /^[a-f0-9-]{36}$/i.test(friend)).slice(-500) : [], pushSubscriptions: Array.isArray(oldUser.pushSubscriptions) ? oldUser.pushSubscriptions.filter(isValidPushSubscription).slice(-5) : [] }; database.names[normName(oldUser.name)] = identity; }
   }
   friendRequests = Array.isArray(previous.friendRequests) ? previous.friendRequests.filter(request => request && /^[a-f0-9-]{36}$/i.test(request.id || '') && /^[a-f0-9-]{36}$/i.test(request.from || '') && /^[a-f0-9-]{36}$/i.test(request.to || '') && request.from !== request.to && database.users[request.from] && database.users[request.to] && typeof request.time === 'string').slice(-5000) : [];
   homework = Array.isArray(previous.homework) ? previous.homework.filter(entry => entry && typeof entry.id === 'string' && homeworkFolderIds.has(entry.folder) && typeof entry.identity === 'string' && typeof entry.name === 'string' && typeof entry.time === 'string' && (typeof entry.text === 'string' || typeof entry.image === 'string') && (!entry.image || (entry.image.length <= 650_000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.image)))).map(entry => ({ ...entry, ...(typeof entry.expiresAt === 'string' && Number.isFinite(Date.parse(entry.expiresAt)) ? { expiresAt: entry.expiresAt } : {}) })).filter(entry => !entry.expiresAt || Date.parse(entry.expiresAt) > Date.now()).slice(-3000) : [];
@@ -54,6 +58,19 @@ function cleanName(value) { return String(value || '').trim().replace(/\s+/g, ' 
 function normName(value) { return cleanName(value).toLocaleLowerCase('de'); }
 function publicUser(user) { return { name: user.name, avatar: user.avatar || null }; }
 function getUser(id) { return database.users[String(id || '')]; }
+function isValidPushSubscription(subscription) {
+  if (!subscription || typeof subscription.endpoint !== 'string' || subscription.endpoint.length > 2048 || typeof subscription.keys?.p256dh !== 'string' || typeof subscription.keys?.auth !== 'string') return false;
+  try { const host = new URL(subscription.endpoint).hostname.toLowerCase(); return subscription.endpoint.startsWith('https://') && ['.mozilla.com', '.googleapis.com', '.apple.com', '.windows.com'].some(suffix => host.endsWith(suffix)); }
+  catch { return false; }
+}
+function sendPush(identity, title, body, tag, url = '/') {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+  const user = getUser(identity); if (!user?.pushSubscriptions?.length) return;
+  const payload = JSON.stringify({ title, body, tag, url });
+  for (const subscription of [...user.pushSubscriptions]) webpush.sendNotification(subscription, payload).catch(error => {
+    if (error.statusCode === 404 || error.statusCode === 410) { user.pushSubscriptions = user.pushSubscriptions.filter(item => item.endpoint !== subscription.endpoint); saveDatabase(); }
+  });
+}
 function identityFrom(req, data) { return req.headers['x-pwg-identity'] || data?.identity || ''; }
 function send(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); }
 function readBody(req, maxLength = 180_000) { return new Promise((resolve, reject) => { let body = ''; req.on('data', part => { body += part; if (body.length > maxLength) { reject(new Error('too_large')); req.destroy(); } }); req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('invalid_json')); } }); }); }
@@ -99,7 +116,19 @@ const server = http.createServer(async (req, res) => {
       if (database.names[normName(name)]) return send(res, 409, { error: 'Dieser Name ist schon vergeben. Bitte wähle einen anderen Namen.' });
       user = { identity, name, contacts: [], friends: [] }; database.users[identity] = user; database.names[normName(name)] = identity; saveDatabase(); return send(res, 201, userSummary(user));
     }
+    if (req.method === 'GET' && url.pathname === '/api/push/config') return send(res, 200, { enabled: Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY), publicKey: VAPID_PUBLIC_KEY || '' });
     if (!user) return send(res, 401, { error: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' });
+    if (req.method === 'POST' && url.pathname === '/api/push/subscribe') {
+      if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return send(res, 503, { error: 'Push-Mitteilungen sind noch nicht auf dem Server eingerichtet.' });
+      if (!isValidPushSubscription(data.subscription)) return send(res, 400, { error: 'Das Gerät konnte nicht für Mitteilungen registriert werden.' });
+      user.pushSubscriptions ||= [];
+      user.pushSubscriptions = user.pushSubscriptions.filter(item => item.endpoint !== data.subscription.endpoint);
+      user.pushSubscriptions.push(data.subscription); if (user.pushSubscriptions.length > 5) user.pushSubscriptions.shift();
+      saveDatabase(); return send(res, 201, { subscribed: true });
+    }
+    if (req.method === 'DELETE' && url.pathname === '/api/push/subscribe') {
+      const endpoint = String(data.endpoint || ''); user.pushSubscriptions = (user.pushSubscriptions || []).filter(item => item.endpoint !== endpoint); saveDatabase(); return send(res, 200, { unsubscribed: true });
+    }
     if (req.method === 'GET' && url.pathname === '/api/profile') return send(res, 200, userSummary(user));
     if (req.method === 'GET' && url.pathname === '/api/contacts') {
       const contacts = (user.contacts || []).map(contactId => getUser(contactId)).filter(Boolean).map(contact => ({ identity: contact.identity, ...publicUser(contact) }));
@@ -118,7 +147,7 @@ const server = http.createServer(async (req, res) => {
       const existing = friendRequests.find(request => (request.from === user.identity && request.to === targetId) || (request.from === targetId && request.to === user.identity));
       if (existing) return send(res, 409, { error: existing.to === user.identity ? 'Diese Person hat dir schon eine Anfrage geschickt. Öffne dein Profil, um sie anzunehmen.' : 'Die Freundschaftsanfrage wurde schon gesendet.' });
       const request = { id: randomUUID(), from: user.identity, to: targetId, time: new Date().toISOString() };
-      friendRequests.push(request); saveDatabase(); return send(res, 201, { sent: true });
+      friendRequests.push(request); saveDatabase(); sendPush(targetId, 'Neue Freundschaftsanfrage', user.name + ' möchte mit dir befreundet sein.', 'friend-' + request.id, '/?open=profile'); return send(res, 201, { sent: true });
     }
     if (req.method === 'POST' && /^\/api\/friend-requests\/[a-f0-9-]{36}\/accept$/i.test(url.pathname)) {
       const requestId = url.pathname.split('/')[3], requestIndex = friendRequests.findIndex(request => request.id === requestId && request.to === user.identity);
@@ -149,7 +178,7 @@ const server = http.createServer(async (req, res) => {
       if (!Array.from(room.clients).some(client => client.joined?.identity === user.identity)) return send(res, 403, { error: 'Du musst selbst im Raum sein, um Freunde einzuladen.' });
       if (roomInvites.some(invite => invite.to === targetId && invite.code === code)) return send(res, 409, { error: 'Diese Person wurde schon in den Raum eingeladen.' });
       const invite = { id: randomUUID(), from: user.identity, to: targetId, code, roomName: room.name, time: new Date().toISOString() };
-      roomInvites.push(invite); return send(res, 201, { sent: true });
+      roomInvites.push(invite); sendPush(targetId, 'Einladung in einen Chatraum', user.name + ' lädt dich in „' + room.name + '“ ein.', 'room-' + invite.id, '/?open=profile'); return send(res, 201, { sent: true });
     }
     if (req.method === 'POST' && /^\/api\/room-invites\/[a-f0-9-]{36}\/accept$/i.test(url.pathname)) {
       removeOldRoomInvites();
@@ -184,7 +213,10 @@ const server = http.createServer(async (req, res) => {
         if (expiresAtInput && (!Number.isFinite(expiresAtTime) || expiresAtTime <= Date.now())) return send(res, 400, { error: 'Das Löschdatum muss in der Zukunft liegen.' });
         const entry = { id: randomUUID(), folder, identity: user.identity, name: user.name, text, ...(image ? { image } : {}), ...(expiresAtInput ? { expiresAt: new Date(expiresAtTime).toISOString() } : {}), time: new Date().toISOString() };
         homework.push(entry); if (homework.length > 3000) homework.splice(0, homework.length - 3000);
-        saveDatabase(); const { identity, ...publicEntry } = entry; return send(res, 201, { entry: { ...publicEntry, isMine: true } });
+        saveDatabase();
+        const subject = homeworkFolders.find(([folderId]) => folderId === folder)?.[1] || 'Hausaufgaben';
+        for (const recipientId of Object.keys(database.users)) if (recipientId !== user.identity) sendPush(recipientId, 'Neue Hausaufgabe: ' + subject, user.name + ' hat etwas im Fach ' + subject + ' geteilt.', 'homework-' + entry.id, '/?open=homework&folder=' + encodeURIComponent(folder));
+        const { identity, ...publicEntry } = entry; return send(res, 201, { entry: { ...publicEntry, isMine: true } });
       }
     }
     if (req.method === 'DELETE' && /^\/api\/homework\/[a-f0-9-]{36}$/i.test(url.pathname)) {
@@ -299,6 +331,11 @@ wss.on('connection', (socket) => {
       room.history.push(message); room.historyBytes += JSON.stringify(message).length;
       while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
       broadcast(room, message);
+      for (const participantId of room.participants || []) {
+        if (participantId === joined.identity) continue;
+        const alreadyInRoom = Array.from(room.clients).some(client => client.joined?.identity === participantId);
+        if (!alreadyInRoom) sendPush(participantId, 'Neue Nachricht in ' + room.name, joined.name + ': ' + text.slice(0, 140), 'message-' + joined.code, '/?room=' + joined.code);
+      }
     } else if (data.type === 'image' && joined) {
       const room = rooms.get(joined.code); if (!room) return;
       const image = String(data.image || '');

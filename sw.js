@@ -1,9 +1,9 @@
-const CACHE_NAME = 'pwg-chatroom-shell-v38';
+const CACHE_NAME = 'pwg-chatroom-shell-v39';
 const APP_SHELL = [
   '/',
   '/index.html',
-  '/style.css?v=roominvites1',
-  '/app.js?v=roominvites1',
+  '/style.css?v=notifications1',
+  '/app.js?v=notifications1',
   '/manifest.webmanifest',
   '/icon-192.png',
   '/icon-512.png',
@@ -21,6 +21,33 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('pwg-chatroom-') && key !== CACHE_NAME).map(key => caches.delete(key)))));
   self.clients.claim();
+});
+
+self.addEventListener('push', event => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data?.text() || 'Du hast eine neue Mitteilung.' }; }
+  event.waitUntil(self.registration.showNotification(data.title || 'PWG Chatroom', {
+    body: data.body || 'Du hast eine neue Mitteilung.',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: data.tag || 'pwg-chatroom',
+    data: { url: data.url || '/' }
+  }));
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const targetUrl = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windows) {
+      if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+        if ('navigate' in client) await client.navigate(targetUrl);
+        return client.focus();
+      }
+    }
+    return self.clients.openWindow(targetUrl);
+  })());
 });
 
 self.addEventListener('fetch', event => {
