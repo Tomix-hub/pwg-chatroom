@@ -330,7 +330,9 @@ wss.on('connection', (socket) => {
     } else if (data.type === 'message' && joined) {
       const text = String(data.text || '').trim().slice(0, 1000); if (!text) return;
       const room = rooms.get(joined.code); if (!room) return;
-      const message = { type: 'message', id: randomUUID(), identity: joined.identity, name: joined.name, avatar: joined.avatar, text, time: new Date().toISOString() };
+      const original = room.history.find(item => item.id === String(data.replyTo || ''));
+      const replyTo = original ? { id: original.id, name: original.name, text: original.type === 'image' ? '📷 Bild' : String(original.text || '').slice(0, 180) } : null;
+      const message = { type: 'message', id: randomUUID(), identity: joined.identity, name: joined.name, avatar: joined.avatar, text, ...(replyTo ? { replyTo } : {}), time: new Date().toISOString() };
       room.history.push(message); room.historyBytes += JSON.stringify(message).length;
       while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
       broadcast(room, message);
@@ -343,7 +345,9 @@ wss.on('connection', (socket) => {
       const room = rooms.get(joined.code); if (!room) return;
       const image = String(data.image || '');
       if (image.length > 650000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) return socket.send(JSON.stringify({ type: 'imageError', message: 'Das Bild ist ungültig oder zu groß.' }));
-      const message = { type: 'image', id: randomUUID(), identity: joined.identity, name: joined.name, avatar: joined.avatar, image, time: new Date().toISOString() }; addToHistory(room, message); broadcast(room, message);
+      const original = room.history.find(item => item.id === String(data.replyTo || ''));
+      const replyTo = original ? { id: original.id, name: original.name, text: original.type === 'image' ? '📷 Bild' : String(original.text || '').slice(0, 180) } : null;
+      const message = { type: 'image', id: randomUUID(), identity: joined.identity, name: joined.name, avatar: joined.avatar, image, ...(replyTo ? { replyTo } : {}), time: new Date().toISOString() }; addToHistory(room, message); broadcast(room, message);
     } else if (data.type === 'typing' && joined) {
       const room = rooms.get(joined.code); if (!room) return;
       if (data.active) room.typing.set(joined.identity, joined.name); else room.typing.delete(joined.identity);

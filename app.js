@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null;
+const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null, pendingReply = null;
 const homeworkCatalog = [
   ['englisch-sude', 'Englisch', 'Frau Sude'], ['mathe-funk', 'Mathe', 'Frau Funk'], ['kunst-wenzler', 'Kunst', 'Frau Wenzler'], ['sport-debus', 'Sport', 'Herr Debus'],
   ['englisch-adler', 'Englisch', 'Frau Adler'], ['mathe-schindler', 'Mathe', 'Herr Schindler'], ['kunst-sapcanovic', 'Kunst', 'Frau Sapcanovic'], ['sport-halve', 'Sport', 'Herr Halve'],
@@ -433,6 +433,15 @@ function connect(action) {
 }
 function updateConnection(ok) { $('connection').classList.toggle('offline', !ok); $('connection').innerHTML = '<i></i> ' + (ok ? 'verbunden' : 'Verbindung getrennt'); }
 function renderNotice(text) { const item = document.createElement('div'); item.className = 'notice'; item.textContent = text; $('messages').append(item); scrollDown(); }
+function messagePreview(message) { return message.type === 'image' ? '📷 Bild' : String(message.text || '').slice(0, 180); }
+function setReplyTarget(message) {
+  if (!message?.id) return;
+  pendingReply = { id: message.id, name: message.name, text: messagePreview(message) };
+  $('replyTargetName').textContent = pendingReply.name;
+  $('replyTargetText').textContent = pendingReply.text;
+  $('replyComposer').classList.remove('hidden'); $('message').focus();
+}
+function clearReplyTarget() { pendingReply = null; $('replyComposer').classList.add('hidden'); }
 function renderMessage(msg) {
   const empty = $('messages').querySelector('.empty'); if (empty) empty.remove();  const bubble = document.createElement('article'); bubble.className = 'bubble' + (msg.name === myName ? ' mine' : '');
   if (msg.id) bubble.dataset.messageId = msg.id; if (msg.identity) bubble.dataset.identity = msg.identity; bubble._chatMessage = msg;
@@ -440,8 +449,18 @@ function renderMessage(msg) {
   if (msg.identity && msg.identity !== identity) { const name = document.createElement('button'); name.className = 'sender-name'; name.type = 'button'; name.textContent = msg.name; name.title = 'Profil von ' + msg.name + ' öffnen'; name.addEventListener('click', () => openOtherProfile(msg.identity, msg.name, msg.avatar)); sender.append(name); }
   else sender.append(document.createTextNode(msg.name === myName ? 'Du' : msg.name));
   bubble.append(sender);
+  if (msg.replyTo) {
+    const quote = document.createElement('button'); quote.type = 'button'; quote.className = 'reply-quote'; quote.setAttribute('aria-label', 'Ursprüngliche Nachricht von ' + msg.replyTo.name + ' anzeigen');
+    const quoteName = document.createElement('strong'); quoteName.textContent = msg.replyTo.name;
+    const quoteText = document.createElement('span'); quoteText.textContent = msg.replyTo.text;
+    quote.append(quoteName, quoteText); quote.addEventListener('click', () => {
+      const original = document.querySelector('[data-message-id="' + CSS.escape(msg.replyTo.id) + '"]');
+      if (original) { original.scrollIntoView({ behavior: 'smooth', block: 'center' }); original.classList.add('reply-highlight'); setTimeout(() => original.classList.remove('reply-highlight'), 1300); }
+    }); bubble.append(quote);
+  }
   if (msg.type === 'image') { const image = document.createElement('img'); image.className = 'message-image'; image.src = msg.image; image.alt = 'Bild von ' + msg.name; image.loading = 'lazy'; bubble.append(image); }
   else { const text = document.createElement('div'); text.className = 'text'; text.textContent = msg.text; bubble.append(text); }  const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); bubble.append(time);
+  if (msg.id) { const reply = document.createElement('button'); reply.type = 'button'; reply.className = 'reply-action'; reply.textContent = '↩ Antworten'; reply.addEventListener('click', () => setReplyTarget(msg)); bubble.append(reply); }
   if (msg.name === myName && msg.id) { const receipt = document.createElement('span'); receipt.className = 'read-receipt'; receipt.textContent = '✓ Gesendet'; bubble.append(receipt); ownReceipts.set(msg.id, receipt); }
   $('messages').append(bubble); if (readObserver && msg.id && msg.name !== myName) readObserver.observe(bubble); else if (!readObserver && msg.id && msg.name !== myName && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'read', messageId: msg.id })); scrollDown();
 }
@@ -533,13 +552,14 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { if (activeWhisper) closeWhisper(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
+function leaveRoom() { if (activeWhisper) closeWhisper(); clearReplyTarget(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
 $('create').addEventListener('click', () => connect('create'));
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6); error.textContent = ''; });
 roomNameInput.addEventListener('input', () => error.textContent = '');$('message').addEventListener('input', () => { if ($('message').value.trim()) updateTyping(); else stopTyping(); });
 $('message').addEventListener('blur', stopTyping);
-$('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { stopTyping(); socket.send(JSON.stringify({ type: 'message', text })); input.value = ''; input.focus(); } });
+$('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { stopTyping(); socket.send(JSON.stringify({ type: 'message', text, replyTo: pendingReply?.id || null })); input.value = ''; clearReplyTarget(); input.focus(); } });
+$('cancelReply').addEventListener('click', clearReplyTarget);
 $('whisperForm').addEventListener('submit', event => { event.preventDefault(); const input = $('whisperMessage'), text = input.value.trim(), channel = roomCode ? socket : whisperSocket; if (text && activeWhisper && channel?.readyState === WebSocket.OPEN) { sendWhisper(text); input.value = ''; input.focus(); } });
 $('imageButton').addEventListener('click', () => $('imageFile').click());
 $('imageFile').addEventListener('change', async event => {
@@ -547,7 +567,7 @@ $('imageFile').addEventListener('change', async event => {
   if (!file.type.startsWith('image/')) { renderNotice('Bitte wähle eine Bilddatei aus.'); event.target.value = ''; return; }
   if (file.size > 15 * 1024 * 1024) { renderNotice('Das Originalbild ist zu groß. Bitte wähle ein kleineres Bild.'); event.target.value = ''; return; }
   const button = $('imageButton'); button.disabled = true;
-  try { const dataUrl = await compressImage(file); if (dataUrl.length > 650000) throw new Error('Das Bild ist zu groß. Bitte wähle ein kleineres Bild.'); if (socket?.readyState !== WebSocket.OPEN) throw new Error('Die Verbindung zum Raum ist unterbrochen.'); socket.send(JSON.stringify({ type: 'image', image: dataUrl })); }
+  try { const dataUrl = await compressImage(file); if (dataUrl.length > 650000) throw new Error('Das Bild ist zu groß. Bitte wähle ein kleineres Bild.'); if (socket?.readyState !== WebSocket.OPEN) throw new Error('Die Verbindung zum Raum ist unterbrochen.'); socket.send(JSON.stringify({ type: 'image', image: dataUrl, replyTo: pendingReply?.id || null })); clearReplyTarget(); }
   catch (err) { renderNotice(err.message || 'Das Bild konnte nicht geladen werden. Wähle JPG oder PNG.'); }
   finally { button.disabled = false; event.target.value = ''; }
 });
