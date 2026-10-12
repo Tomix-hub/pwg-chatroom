@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws');
 const PORT = Number(process.env.PORT || 3000);
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
 const rooms = new Map();
+const whispers = new Map();
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
 let database = { users: {}, names: {} };
 let hadStoredProfiles = false;
@@ -36,6 +37,7 @@ function addToHistory(room, message) {
   room.history.push(message); room.historyBytes = (room.historyBytes || 0) + JSON.stringify(message).length;
   while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
 }
+function whisperKey(code, a, b) { return code + ':' + [a, b].sort().join(':'); }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -124,6 +126,27 @@ wss.on('connection', (socket) => {
         rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined; const room = rooms.get(code); room.clients.add(socket);
         socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] })); broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
+      }
+    } else if (data.type === 'whisperHistory' && joined) {
+      const withIdentity = String(data.withIdentity || '');
+      if (!/^[a-f0-9-]{36}$/i.test(withIdentity) || withIdentity === joined.identity) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Diesen privaten Chat kannst du nicht öffnen.' }));
+      const room = rooms.get(joined.code);
+      const partnerOnline = [...room.clients].some(client => client.readyState === 1 && client.joined?.identity === withIdentity);
+      if (!partnerOnline) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Die Person muss gerade mit dir im Raum sein.' }));
+      socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity, messages: whispers.get(whisperKey(joined.code, joined.identity, withIdentity)) || [] }));
+    } else if (data.type === 'whisper' && joined) {
+      const toIdentity = String(data.toIdentity || ''), text = String(data.text || '').trim().slice(0, 1000);
+      if (!/^[a-f0-9-]{36}$/i.test(toIdentity) || toIdentity === joined.identity || !text) return;
+      const room = rooms.get(joined.code);
+      const recipients = [...room.clients].filter(client => client.readyState === 1 && client.joined?.identity === toIdentity);
+      if (!recipients.length) return socket.send(JSON.stringify({ type: 'whisperError', message: 'Die Person ist nicht mehr in diesem Raum.' }));
+      const key = whisperKey(joined.code, joined.identity, toIdentity), history = whispers.get(key) || [];
+      const message = { fromIdentity: joined.identity, name: joined.name, text, time: new Date().toISOString() };
+      history.push(message); if (history.length > 200) history.splice(0, history.length - 200); whispers.set(key, history);
+      for (const client of room.clients) {
+        if (client.readyState !== 1) continue;
+        const viewer = client.joined?.identity;
+        if (viewer === joined.identity || viewer === toIdentity) client.send(JSON.stringify({ type: 'whisper', withIdentity: viewer === joined.identity ? toIdentity : joined.identity, message }));
       }
     } else if (data.type === 'message' && joined) {
       const text = String(data.text || '').trim().slice(0, 1000); if (!text) return;

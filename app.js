@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer;
+const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null;
 const ownReceipts = new Map();
 const readObserver = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting && entry.intersectionRatio >= 0.65) {
@@ -118,9 +118,18 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
+    if (data.type === 'joined') { if (activeWhisper) closeWhisper(); roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
     if (data.type === 'message' || data.type === 'image') renderMessage(data);
     if (data.type === 'avatarUpdate') document.querySelectorAll('.bubble[data-identity="' + CSS.escape(data.identity) + '"] .sender-avatar').forEach(element => updateAvatarElement(element, data.avatar, data.name));
+    if (data.type === 'whisperHistory' && activeWhisper?.identity === data.withIdentity) {
+      $('privateMessages').replaceChildren();
+      if (!data.messages.length) renderWhisperEmpty(); else data.messages.forEach(renderWhisperMessage);
+    }
+    if (data.type === 'whisper') {
+      if (activeWhisper?.identity === data.withIdentity) renderWhisperMessage(data.message);
+      else renderNotice('Private Nachricht von ' + data.message.name + '. Tippe auf den Namen im Raumchat, um zu antworten.');
+    }
+    if (data.type === 'whisperError') { if (activeWhisper) renderWhisperNotice(data.message); else renderNotice(data.message); }
     if (data.type === 'notice') renderNotice(data.text);
     if (data.type === 'typing') renderTyping(data.users);
     if (data.type === 'readReceipt') updateReadReceipt(data.messageId, data.count);
@@ -133,25 +142,54 @@ function renderNotice(text) { const item = document.createElement('div'); item.c
 function renderMessage(msg) {
   const empty = $('messages').querySelector('.empty'); if (empty) empty.remove();  const bubble = document.createElement('article'); bubble.className = 'bubble' + (msg.name === myName ? ' mine' : '');
   if (msg.id) bubble.dataset.messageId = msg.id; if (msg.identity) bubble.dataset.identity = msg.identity; bubble._chatMessage = msg;
-  const sender = document.createElement('span'); sender.className = 'sender'; const avatar = document.createElement('span'); avatar.className = 'sender-avatar'; updateAvatarElement(avatar, msg.avatar, msg.name); sender.append(avatar, document.createTextNode(msg.name === myName ? 'Du' : msg.name)); bubble.append(sender);
+  const sender = document.createElement('span'); sender.className = 'sender'; const avatar = document.createElement('span'); avatar.className = 'sender-avatar'; updateAvatarElement(avatar, msg.avatar, msg.name); sender.append(avatar);
+  if (msg.identity && msg.identity !== identity) { const name = document.createElement('button'); name.className = 'sender-name'; name.type = 'button'; name.textContent = msg.name; name.title = 'Privat mit ' + msg.name + ' flüstern'; name.addEventListener('click', () => openWhisper(msg.identity, msg.name)); sender.append(name); }
+  else sender.append(document.createTextNode(msg.name === myName ? 'Du' : msg.name));
+  bubble.append(sender);
   if (msg.type === 'image') { const image = document.createElement('img'); image.className = 'message-image'; image.src = msg.image; image.alt = 'Bild von ' + msg.name; image.loading = 'lazy'; bubble.append(image); }
   else { const text = document.createElement('div'); text.className = 'text'; text.textContent = msg.text; bubble.append(text); }  const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); bubble.append(time);
   if (msg.name === myName && msg.id) { const receipt = document.createElement('span'); receipt.className = 'read-receipt'; receipt.textContent = '✓ Gesendet'; bubble.append(receipt); ownReceipts.set(msg.id, receipt); }
   $('messages').append(bubble); if (readObserver && msg.id && msg.name !== myName) readObserver.observe(bubble); else if (!readObserver && msg.id && msg.name !== myName && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'read', messageId: msg.id })); scrollDown();
-}function updateReadReceipt(messageId, count) { const receipt = ownReceipts.get(messageId); if (receipt) receipt.textContent = '✓✓ Gelesen' + (count > 1 ? ' (' + count + ')' : ''); }
+}
+function openWhisper(targetIdentity, targetName) {
+  if (!targetIdentity || targetIdentity === identity || socket?.readyState !== WebSocket.OPEN) return;
+  stopTyping(); activeWhisper = { identity: targetIdentity, name: targetName };
+  $('privateBar').classList.remove('hidden'); $('privateTitle').textContent = 'Flüstern mit ' + targetName;
+  $('messages').classList.add('hidden'); $('privateMessages').classList.remove('hidden'); $('privateMessages').replaceChildren();
+  $('chatFoot').textContent = 'Nur du und ' + targetName + ' können diese Nachrichten sehen.';
+  $('imageButton').classList.add('hidden'); $('message').placeholder = 'Private Nachricht an ' + targetName + ' …';
+  socket.send(JSON.stringify({ type: 'whisperHistory', withIdentity: targetIdentity })); $('message').focus();
+}
+function closeWhisper() {
+  activeWhisper = null; $('privateBar').classList.add('hidden'); $('privateMessages').classList.add('hidden'); $('messages').classList.remove('hidden');
+  $('chatFoot').textContent = 'Nachrichten sind für alle im Raum sichtbar.'; $('imageButton').classList.remove('hidden'); $('message').placeholder = 'Schreib eine Nachricht …';
+}
+function renderWhisperEmpty() { const empty = document.createElement('div'); empty.className = 'empty'; empty.innerHTML = '<span>✉</span><strong>Flüstern beginnt hier.</strong><small>Diese Unterhaltung ist nur für euch beide sichtbar.</small>'; $('privateMessages').append(empty); }
+function renderWhisperNotice(message) { const notice = document.createElement('div'); notice.className = 'notice'; notice.textContent = message; $('privateMessages').append(notice); }
+function renderWhisperMessage(msg) {
+  const empty = $('privateMessages').querySelector('.empty'); if (empty) empty.remove();
+  const bubble = document.createElement('article'); bubble.className = 'bubble' + (msg.fromIdentity === identity ? ' mine' : '');
+  const sender = document.createElement('span'); sender.className = 'sender'; sender.textContent = msg.fromIdentity === identity ? 'Du' : msg.name;
+  const text = document.createElement('div'); text.className = 'text'; text.textContent = msg.text;
+  const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  bubble.append(sender, text, time); $('privateMessages').append(bubble); $('privateMessages').scrollTop = $('privateMessages').scrollHeight;
+}
+function sendWhisper(text) { if (activeWhisper && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'whisper', toIdentity: activeWhisper.identity, text })); }
+$('privateBack').addEventListener('click', closeWhisper);
+function updateReadReceipt(messageId, count) { const receipt = ownReceipts.get(messageId); if (receipt) receipt.textContent = '✓✓ Gelesen' + (count > 1 ? ' (' + count + ')' : ''); }
 function renderTyping(users) { const names = (users || []).filter(name => name !== myName); const indicator = $('typingIndicator'); indicator.textContent = names.length === 0 ? '' : names.length === 1 ? names[0] + ' tippt gerade…' : names.join(', ') + ' tippen gerade…'; }
-function updateTyping() { if (!socket || socket.readyState !== WebSocket.OPEN) return; if (!typingActive) { socket.send(JSON.stringify({ type: 'typing', active: true })); typingActive = true; } clearTimeout(typingTimer); typingTimer = setTimeout(() => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', active: false })); typingActive = false; }, 1400); }
+function updateTyping() { if (activeWhisper || !socket || socket.readyState !== WebSocket.OPEN) return; if (!typingActive) { socket.send(JSON.stringify({ type: 'typing', active: true })); typingActive = true; } clearTimeout(typingTimer); typingTimer = setTimeout(() => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', active: false })); typingActive = false; }, 1400); }
 function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'typing', active: false })); typingActive = false; }
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; }
+function leaveRoom() { if (activeWhisper) closeWhisper(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; }
 $('create').addEventListener('click', () => connect('create'));
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6); error.textContent = ''; });
 roomNameInput.addEventListener('input', () => error.textContent = '');$('message').addEventListener('input', () => { if ($('message').value.trim()) updateTyping(); else stopTyping(); });
 $('message').addEventListener('blur', stopTyping);
-$('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { stopTyping(); socket.send(JSON.stringify({ type: 'message', text })); input.value = ''; input.focus(); } });
+$('form').addEventListener('submit', event => { event.preventDefault(); const input = $('message'), text = input.value.trim(); if (text && socket?.readyState === WebSocket.OPEN) { if (activeWhisper) sendWhisper(text); else { stopTyping(); socket.send(JSON.stringify({ type: 'message', text })); } input.value = ''; input.focus(); } });
 $('imageButton').addEventListener('click', () => $('imageFile').click());
 $('imageFile').addEventListener('change', async event => {
   const file = event.target.files[0]; if (!file) return;
