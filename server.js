@@ -83,14 +83,14 @@ wss.on('connection', (socket) => {
         const roomName = String(data.roomName || '').trim().slice(0, 32);
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
         let code; do { code = randomInt(0, 36 ** 6).toString(36).toUpperCase().padStart(6, '0'); } while (rooms.has(code));
-        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), history: [], historyBytes: 0 });
+        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
         joined = { code, identity: user.identity, name }; const room = rooms.get(code); room.clients.add(socket);
         socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] })); broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
       }
     } else if (data.type === 'message' && joined) {
       const text = String(data.text || '').trim().slice(0, 1000); if (!text) return;
       const room = rooms.get(joined.code); if (!room) return;
-      const message = { type: 'message', name: joined.name, text, time: new Date().toISOString() };
+      const message = { type: 'message', id: randomUUID(), name: joined.name, text, time: new Date().toISOString() };
       room.history.push(message); room.historyBytes += JSON.stringify(message).length;
       while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
       broadcast(room, message);
@@ -98,9 +98,22 @@ wss.on('connection', (socket) => {
       const room = rooms.get(joined.code); if (!room) return;
       const image = String(data.image || '');
       if (image.length > 650000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) return socket.send(JSON.stringify({ type: 'imageError', message: 'Das Bild ist ungültig oder zu groß.' }));
-      const message = { type: 'image', name: joined.name, image, time: new Date().toISOString() }; addToHistory(room, message); broadcast(room, message);
+      const message = { type: 'image', id: randomUUID(), name: joined.name, image, time: new Date().toISOString() }; addToHistory(room, message); broadcast(room, message);
+    } else if (data.type === 'typing' && joined) {
+      const room = rooms.get(joined.code); if (!room) return;
+      if (data.active) room.typing.set(joined.identity, joined.name); else room.typing.delete(joined.identity);
+      broadcast(room, { type: 'typing', users: [...room.typing].filter(([identity]) => identity !== joined.identity).map(([, name]) => name) });
+    } else if (data.type === 'read' && joined) {
+      const room = rooms.get(joined.code); if (!room) return;
+      const message = room.history.find(item => item.id === data.messageId);
+      if (!message || message.name === joined.name) return;
+      if (!room.readers.has(message.id)) room.readers.set(message.id, new Set());
+      const readers = room.readers.get(message.id);
+      if (readers.has(joined.identity)) return;
+      readers.add(joined.identity);
+      broadcast(room, { type: 'readReceipt', messageId: message.id, count: readers.size });
     }
   });
-  socket.on('close', () => { if (joined) { const room = rooms.get(joined.code); if (room) { room.clients.delete(socket); broadcast(room, { type: 'notice', text: joined.name + ' hat den Raum verlassen.' }); } } });
+  socket.on('close', () => { if (joined) { const room = rooms.get(joined.code); if (room) { room.clients.delete(socket); room.typing.delete(joined.identity); broadcast(room, { type: 'typing', users: [...room.typing.values()] }); broadcast(room, { type: 'notice', text: joined.name + ' hat den Raum verlassen.' }); } } });
 });
 server.listen(PORT, '0.0.0.0', () => console.log('PWG Chatroom läuft auf Port ' + PORT));
