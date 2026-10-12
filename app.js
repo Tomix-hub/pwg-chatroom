@@ -20,8 +20,13 @@ async function api(url, options = {}) {
 }
 function fillProfile(profile) {
   myProfile = profile; myName = profile.name; nameInput.value = myName; localStorage.setItem('pwgChatName', myName);
-  $('profileName').textContent = profile.name; $('profileAvatar').textContent = profile.name.trim().charAt(0).toLocaleUpperCase();
+  $('profileName').textContent = profile.name; updateAvatarElement($('profileAvatar'), profile.avatar, profile.name);
   $('renameName').value = profile.name;
+}
+function updateAvatarElement(element, avatar, name) {
+  element.replaceChildren();
+  if (avatar) { const image = document.createElement('img'); image.className = 'avatar-photo'; image.src = avatar; image.alt = ''; element.append(image); }
+  else element.textContent = (name || '?').trim().charAt(0).toLocaleUpperCase();
 }
 async function loadProfile() {
   try { const data = await api('/api/profile'); fillProfile(data.profile); }
@@ -71,6 +76,30 @@ $('renameForm').addEventListener('submit', async event => {
     input.focus();
   }
 });
+$('changeAvatar').addEventListener('click', () => $('avatarFile').click());
+$('avatarFile').addEventListener('change', async event => {
+  const file = event.target.files[0]; if (!file) return;
+  const status = $('avatarStatus'); status.textContent = '';
+  if (!file.type.startsWith('image/')) { status.textContent = 'Bitte wähle eine Bilddatei aus.'; event.target.value = ''; return; }
+  if (file.size > 12 * 1024 * 1024) { status.textContent = 'Das Bild ist zu groß. Wähle ein kleineres Bild.'; event.target.value = ''; return; }
+  try {
+    const avatar = await compressAvatar(file);
+    const data = await api('/api/profile/avatar', { method: 'POST', body: JSON.stringify({ avatar }) });
+    fillProfile(data.profile); status.textContent = 'Profilbild gespeichert.';
+  } catch (err) { status.textContent = err.message || 'Das Profilbild konnte nicht gespeichert werden.'; }
+  event.target.value = '';
+});
+async function compressAvatar(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image(); image.src = url; await image.decode();
+    const scale = Math.min(1, 256 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    for (const quality of [0.82, 0.7, 0.58, 0.46, 0.34]) { const result = canvas.toDataURL('image/jpeg', quality); if (result.length <= 140000) return result; }
+    throw new Error('Das Profilbild ist zu groß. Bitte wähle ein einfacheres Bild.');
+  } finally { URL.revokeObjectURL(url); }
+}
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
@@ -90,7 +119,9 @@ function connect(action) {
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
     if (data.type === 'joined') { roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); }
-    if (data.type === 'message' || data.type === 'image') renderMessage(data);    if (data.type === 'notice') renderNotice(data.text);
+    if (data.type === 'message' || data.type === 'image') renderMessage(data);
+    if (data.type === 'avatarUpdate') document.querySelectorAll('.bubble[data-identity="' + CSS.escape(data.identity) + '"] .sender-avatar').forEach(element => updateAvatarElement(element, data.avatar, data.name));
+    if (data.type === 'notice') renderNotice(data.text);
     if (data.type === 'typing') renderTyping(data.users);
     if (data.type === 'readReceipt') updateReadReceipt(data.messageId, data.count);
   });
@@ -101,8 +132,8 @@ function updateConnection(ok) { $('connection').classList.toggle('offline', !ok)
 function renderNotice(text) { const item = document.createElement('div'); item.className = 'notice'; item.textContent = text; $('messages').append(item); scrollDown(); }
 function renderMessage(msg) {
   const empty = $('messages').querySelector('.empty'); if (empty) empty.remove();  const bubble = document.createElement('article'); bubble.className = 'bubble' + (msg.name === myName ? ' mine' : '');
-  if (msg.id) bubble.dataset.messageId = msg.id; bubble._chatMessage = msg;
-  const sender = document.createElement('span'); sender.className = 'sender'; sender.textContent = msg.name === myName ? 'Du' : msg.name; bubble.append(sender);
+  if (msg.id) bubble.dataset.messageId = msg.id; if (msg.identity) bubble.dataset.identity = msg.identity; bubble._chatMessage = msg;
+  const sender = document.createElement('span'); sender.className = 'sender'; const avatar = document.createElement('span'); avatar.className = 'sender-avatar'; updateAvatarElement(avatar, msg.avatar, msg.name); sender.append(avatar, document.createTextNode(msg.name === myName ? 'Du' : msg.name)); bubble.append(sender);
   if (msg.type === 'image') { const image = document.createElement('img'); image.className = 'message-image'; image.src = msg.image; image.alt = 'Bild von ' + msg.name; image.loading = 'lazy'; bubble.append(image); }
   else { const text = document.createElement('div'); text.className = 'text'; text.textContent = msg.text; bubble.append(text); }  const time = document.createElement('time'); time.textContent = new Date(msg.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); bubble.append(time);
   if (msg.name === myName && msg.id) { const receipt = document.createElement('span'); receipt.className = 'read-receipt'; receipt.textContent = '✓ Gesendet'; bubble.append(receipt); ownReceipts.set(msg.id, receipt); }
