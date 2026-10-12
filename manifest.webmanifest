@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "PWG Chatroom — by Tom Carthaus",
+  "short_name": "PWG Chat",
+  "description": "Erstelle einen gemeinsamen Chatraum oder tritt mit einem Code bei.",
+  "lang": "de",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#f5f3ee",
+  "theme_color": "#f5f3ee",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
