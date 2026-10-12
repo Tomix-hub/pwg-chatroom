@@ -149,14 +149,14 @@ loadProfile().then(() => { if (myProfile && hasInviteCode) connect('join'); else
 
 
 function setTheme(theme) {
-  const selected = ['gold', 'light', 'stone'].includes(theme) ? theme : 'gold';
+  const selected = ['gold', 'light', 'stone', 'zoe'].includes(theme) ? theme : 'gold';
   document.body.dataset.theme = selected;
   localStorage.setItem('pwgChatTheme', selected);
   document.querySelectorAll('[data-theme-choice]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.themeChoice === selected));
   });
   const status = $('themeStatus');
-  if (status) status.textContent = 'Aktives Design: ' + ({ gold: 'Schwarz & Gold', light: 'Weiß & Schwarz', stone: 'Sandstein' }[selected]);
+  if (status) status.textContent = 'Aktives Design: ' + ({ gold: 'Schwarz & Gold', light: 'Weiß & Schwarz', stone: 'Sandstein', zoe: 'Zoe' }[selected]);
 }
 setTheme(localStorage.getItem('pwgChatTheme') || 'gold');
 document.querySelectorAll('[data-theme-choice]').forEach(button => button.addEventListener('click', () => setTheme(button.dataset.themeChoice)));
