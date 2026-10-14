@@ -30,44 +30,6 @@ async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', 'X-PWG-Identity': identity, ...(options.headers || {}) } });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Die Anfrage ist fehlgeschlagen.'); return result;
 }
-let assistantConfigured = null;
-let assistantMessages = (() => { try { const saved = JSON.parse(localStorage.getItem('pwgAssistantChat:' + identity) || '[]'); return Array.isArray(saved) ? saved.filter(item => ['user', 'assistant'].includes(item?.role) && typeof item.content === 'string').slice(-24) : []; } catch { return []; } })();
-function saveAssistantMessages() { try { localStorage.setItem('pwgAssistantChat:' + identity, JSON.stringify(assistantMessages.slice(-24))); } catch {} }
-function renderAssistantMessages() {
-  const list = $('assistantMessages'); list.replaceChildren();
-  if (!assistantMessages.length) { const greeting = document.createElement('div'); greeting.className = 'assistant-message assistant-answer'; greeting.textContent = 'Hallo! Was möchtest du wissen?'; list.append(greeting); return; }
-  for (const item of assistantMessages) { const bubble = document.createElement('div'); bubble.className = 'assistant-message ' + (item.role === 'user' ? 'assistant-question' : 'assistant-answer'); bubble.textContent = item.content; list.append(bubble); }
-  list.scrollTop = list.scrollHeight;
-}
-async function configureAssistant() {
-  const status = $('assistantStatus'), input = $('assistantInput'), sendButton = $('assistantSend');
-  assistantConfigured = false;
-  status.textContent = 'Der Chat im PWG-Fenster ist ausgeschaltet, damit keine API-Kosten entstehen.';
-  input.disabled = true; sendButton.disabled = true;
-  $('assistantExternalLink').classList.remove('hidden');
-  return false;
-}
-async function sendAssistantMessage(event) {
-  event.preventDefault();
-}
-renderAssistantMessages();
-if (assistantMessages.length) $('assistantLauncher').textContent = '✦ ChatGPT';
-async function openAssistant() {
-  $('assistantPanel').classList.remove('hidden'); $('assistantLauncher').setAttribute('aria-expanded', 'true');
-  await configureAssistant(); if (assistantConfigured) $('assistantInput').focus();
-}
-$('assistantLauncher').addEventListener('click', () => {
-  if ($('assistantPanel').classList.contains('hidden')) openAssistant();
-  else { $('assistantPanel').classList.add('hidden'); $('assistantLauncher').setAttribute('aria-expanded', 'false'); }
-});
-$('homeAssistantButton').addEventListener('click', openAssistant);
-$('assistantClose').addEventListener('click', () => { $('assistantPanel').classList.add('hidden'); $('assistantPanel').classList.remove('assistant-expanded'); $('assistantLauncher').setAttribute('aria-expanded', 'false'); $('assistantExpand').textContent = '⛶'; $('assistantExpand').setAttribute('aria-label', 'Fenster vergrößern'); });
-$('assistantExpand').addEventListener('click', () => {
-  const expanded = $('assistantPanel').classList.toggle('assistant-expanded');
-  $('assistantExpand').textContent = expanded ? '↙' : '⛶'; $('assistantExpand').setAttribute('aria-label', expanded ? 'Fenster verkleinern' : 'Fenster vergrößern');
-});
-$('assistantForm').addEventListener('submit', sendAssistantMessage);
-$('assistantNewChat').addEventListener('click', () => { assistantMessages = []; saveAssistantMessages(); renderAssistantMessages(); $('assistantStatus').textContent = 'Der Chat im PWG-Fenster ist ausgeschaltet, damit keine API-Kosten entstehen.'; });
 function decodePushKey(value) { const padded = (value + '='.repeat((4 - value.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(padded), char => char.charCodeAt(0)); }
 async function updateNotificationControls() {
   const button = $('notificationsButton'), status = $('notificationStatus');
