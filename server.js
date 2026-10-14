@@ -75,6 +75,14 @@ function send(res, status, body) { res.writeHead(status, { 'Content-Type': 'appl
 function readBody(req, maxLength = 180_000) { return new Promise((resolve, reject) => { let body = ''; req.on('data', part => { body += part; if (body.length > maxLength) { reject(new Error('too_large')); req.destroy(); } }); req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('invalid_json')); } }); }); }
 function userSummary(user) { return { profile: publicUser(user) }; }
 function broadcast(room, payload) { for (const client of room.clients) if (client.readyState === 1) client.send(JSON.stringify(payload)); }
+function roomGamePayload(room, identity) {
+  const games = room.games || {};
+  const hangman = games.hangman ? { word: games.hangman.status === 'playing' ? '' : games.hangman.word, masked: [...games.hangman.word].map(letter => games.hangman.guesses.includes(letter) || games.hangman.status !== 'playing' ? letter : '_'), guesses: games.hangman.guesses, mistakes: games.hangman.mistakes, status: games.hangman.status, hostName: games.hangman.hostName } : null;
+  const ticTacToe = games.tictactoe ? { board: games.tictactoe.board, players: games.tictactoe.players, turn: games.tictactoe.turn, status: games.tictactoe.status, winner: games.tictactoe.winner || null } : null;
+  const rps = games.rps ? { status: games.rps.status, players: games.rps.players, pickedCount: Object.keys(games.rps.moves).length, yourChoice: games.rps.moves[identity]?.choice || '', choices: games.rps.status === 'done' ? games.rps.moves : null, result: games.rps.result || '' } : null;
+  return { type: 'gameState', games: { hangman, tictactoe: ticTacToe, rps } };
+}
+function broadcastRoomGames(room) { for (const client of room.clients) if (client.readyState === 1 && client.joined) client.send(JSON.stringify(roomGamePayload(room, client.joined.identity))); }
 function addToHistory(room, message) {
   room.history.push(message); room.historyBytes = (room.historyBytes || 0) + JSON.stringify(message).length;
   while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
@@ -293,21 +301,21 @@ wss.on('connection', (socket) => {
         if (!/^[0-9]{6}$/.test(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode ein.' }));
         if (!rooms.has(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Diesen Raum gibt es nicht. Prüfe den Code.' }));
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined;
-        const room = rooms.get(code); rememberRoomParticipants(room, user.identity);
+        const room = rooms.get(code); room.games ||= { hangman: null, tictactoe: null, rps: null }; rememberRoomParticipants(room, user.identity);
         const peers = [...room.clients].filter(client => client.joined).map(client => ({ peerId: client.videoPeerId, identity: client.joined.identity, name: client.joined.name, videoActive: Boolean(client.videoActive) }));
         room.clients.add(socket);
-        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history, videoPeerId: socket.videoPeerId, videoPeers: peers }));
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history, games: roomGamePayload(room, user.identity).games, videoPeerId: socket.videoPeerId, videoPeers: peers }));
         for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: 'roomPeerJoined', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name, videoActive: false }));
         broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
       } else {
         const roomName = String(data.roomName || '').trim().slice(0, 32);
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
         let code; do { code = randomInt(0, 1_000_000).toString().padStart(6, '0'); } while (rooms.has(code));
-        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map(), drawBoards: new Map() });
+        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map(), drawBoards: new Map(), games: { hangman: null, tictactoe: null, rps: null } });
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined; const room = rooms.get(code);
         const peers = [...room.clients].filter(client => client.joined).map(client => ({ peerId: client.videoPeerId, identity: client.joined.identity, name: client.joined.name, videoActive: Boolean(client.videoActive) }));
         room.clients.add(socket);
-        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [], videoPeerId: socket.videoPeerId, videoPeers: peers }));
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [], games: room.games, videoPeerId: socket.videoPeerId, videoPeers: peers }));
         for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: 'roomPeerJoined', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name, videoActive: false }));
         broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
       }
@@ -338,6 +346,49 @@ wss.on('connection', (socket) => {
         const viewer = client.joined?.identity || client.directIdentity || client.inboxIdentity;
         if (viewer === fromIdentity || viewer === toIdentity) client.send(JSON.stringify({ type: 'whisper', withIdentity: viewer === fromIdentity ? toIdentity : fromIdentity, message }));
       }
+    } else if (data.type === 'gameAction' && joined) {
+      const room = rooms.get(joined.code), game = String(data.game || ''), action = String(data.action || '');
+      if (!room || !['hangman', 'tictactoe', 'rps'].includes(game)) return;
+      room.games ||= { hangman: null, tictactoe: null, rps: null };
+      if (game === 'hangman') {
+        const state = room.games.hangman;
+        if (action === 'start' && (!state || state.status !== 'playing')) {
+          const words = ['SCHULHOF', 'FREUNDE', 'PAUSENBROT', 'KLASSENRAUM', 'FUSSBALL', 'FERIEN', 'REGENBOGEN', 'MATHEBUCH', 'KOPFHOERER', 'SONNENBRILLE'];
+          const word = words[randomInt(0, words.length)]; room.games.hangman = { word, guesses: [], mistakes: 0, status: 'playing', hostName: joined.name };
+        } else if (action === 'guess' && state?.status === 'playing') {
+          const letter = String(data.letter || '').toUpperCase(); if (!/^[A-Z]$/.test(letter) || state.guesses.includes(letter)) return;
+          state.guesses.push(letter); if (!state.word.includes(letter)) state.mistakes++;
+          if ([...state.word].every(character => state.guesses.includes(character))) state.status = 'won';
+          else if (state.mistakes >= 7) state.status = 'lost';
+        } else return;
+      } else if (game === 'tictactoe') {
+        const state = room.games.tictactoe;
+        if (action === 'start' && (!state || ['won', 'draw'].includes(state.status))) room.games.tictactoe = { board: Array(9).fill(''), players: [{ identity: joined.identity, name: joined.name, mark: 'X' }], turn: joined.identity, status: 'waiting', winner: null };
+        else if (action === 'join' && state?.status === 'waiting' && !state.players.some(player => player.identity === joined.identity)) { state.players.push({ identity: joined.identity, name: joined.name, mark: 'O' }); state.status = 'playing'; }
+        else if (action === 'move' && state?.status === 'playing' && state.turn === joined.identity && state.players.some(player => player.identity === joined.identity)) {
+          const index = Number(data.index); if (!Number.isInteger(index) || index < 0 || index > 8 || state.board[index]) return;
+          const player = state.players.find(item => item.identity === joined.identity); state.board[index] = player.mark;
+          const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+          const winner = lines.some(([a,b,c]) => state.board[a] && state.board[a] === state.board[b] && state.board[b] === state.board[c]);
+          if (winner) { state.status = 'won'; state.winner = player.name; }
+          else if (state.board.every(Boolean)) state.status = 'draw';
+          else state.turn = state.players.find(item => item.identity !== joined.identity).identity;
+        } else return;
+      } else {
+        const state = room.games.rps;
+        if (action === 'next' && state?.status === 'done') room.games.rps = null;
+        else if (action === 'pick' && ['Stein', 'Papier', 'Schere'].includes(data.choice) && (!state || state.status === 'waiting')) {
+          const current = state || { status: 'waiting', players: [], moves: {}, result: '' };
+          if (current.moves[joined.identity] || Object.keys(current.moves).length >= 2) return;
+          current.players.push({ identity: joined.identity, name: joined.name }); current.moves[joined.identity] = { name: joined.name, choice: data.choice };
+          if (Object.keys(current.moves).length === 2) {
+            const [first, second] = Object.values(current.moves), beats = { Stein: 'Schere', Papier: 'Stein', Schere: 'Papier' };
+            current.status = 'done'; current.result = first.choice === second.choice ? 'Unentschieden!' : beats[first.choice] === second.choice ? first.name + ' gewinnt!' : second.name + ' gewinnt!';
+          }
+          room.games.rps = current;
+        } else return;
+      }
+      broadcastRoomGames(room);
     } else if (data.type === 'drawOpen' && joined) {
       const room = rooms.get(joined.code), targetIdentity = String(data.targetIdentity || '');
       if (!room || !/^[a-f0-9-]{36}$/i.test(targetIdentity) || targetIdentity === joined.identity) return;

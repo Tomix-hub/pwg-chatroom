@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null, pendingReply = null, selfVideoPeerId = '', localCameraStream = null, localCameraTile = null;const videoPeers = new Map();
+const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null, pendingReply = null, selfVideoPeerId = '', localCameraStream = null, localCameraTile = null, roomGames = { hangman: null, tictactoe: null, rps: null }, activeMiniGame = 'hangman';const videoPeers = new Map();
 const homeworkCatalog = [
   ['englisch-sude', 'Englisch', 'Frau Sude'], ['mathe-funk', 'Mathe', 'Frau Funk'], ['kunst-wenzler', 'Kunst', 'Frau Wenzler'], ['sport-debus', 'Sport', 'Herr Debus'],
   ['englisch-adler', 'Englisch', 'Frau Adler'], ['mathe-schindler', 'Mathe', 'Herr Schindler'], ['kunst-sapcanovic', 'Kunst', 'Frau Sapcanovic'], ['sport-halve', 'Sport', 'Herr Halve'],
@@ -425,7 +425,7 @@ async function compressAvatar(file) {
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('roomInviteOverlay').classList.add('hidden'); $('roomQrOverlay').classList.add('hidden'); closeQrScanner(); } });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('roomInviteOverlay').classList.add('hidden'); $('roomQrOverlay').classList.add('hidden'); $('minigamesOverlay').classList.add('hidden'); closeQrScanner(); } });
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
@@ -440,7 +440,8 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } resetRoomVideo(); roomCode = data.code; selfVideoPeerId = data.videoPeerId || ''; (data.videoPeers || []).forEach(addRoomVideoPeer); $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
+    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } resetRoomVideo(); roomCode = data.code; roomGames = data.games || { hangman: null, tictactoe: null, rps: null }; renderMiniGame(); selfVideoPeerId = data.videoPeerId || ''; (data.videoPeers || []).forEach(addRoomVideoPeer); $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
+    if (data.type === 'gameState') { roomGames = data.games || roomGames; renderMiniGame(); }
     if (data.type === 'roomPeerJoined') addRoomVideoPeer(data);
     if (data.type === 'videoPeerUp') { if (!videoPeers.has(data.peerId)) addRoomVideoPeer({ ...data, videoActive: true }); setRoomPeerCamera(data.peerId, true, data.name); }
     if (data.type === 'videoPeerDown') setRoomPeerCamera(data.peerId, false, data.name);
@@ -770,7 +771,7 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { if (activeWhisper) closeWhisper(); $('drawOverlay').classList.add('hidden'); activeDrawing = null; $('drawCanvas')._lastPoint = null; clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
+function leaveRoom() { if (activeWhisper) closeWhisper(); $('drawOverlay').classList.add('hidden'); $('minigamesOverlay').classList.add('hidden'); activeDrawing = null; $('drawCanvas')._lastPoint = null; clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; roomGames = { hangman: null, tictactoe: null, rps: null }; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
 $('create').addEventListener('click', () => connect('create'));
 $('cameraButton').addEventListener('click', () => localCameraStream ? stopRoomCamera(true) : startRoomCamera());
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
@@ -813,6 +814,49 @@ $('copy').addEventListener('click', async () => {
   catch { window.prompt('Teile diesen Einladungslink:', url.toString()); }
 });
 let qrCameraStream = null, qrScanFrame = 0;
+function escapeGameText(value) { return String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]); }
+function sendGameAction(game, action, values = {}) { if (socket?.readyState === WebSocket.OPEN && roomCode) socket.send(JSON.stringify({ type: 'gameAction', game, action, ...values })); }
+function renderMiniGame() {
+  document.querySelectorAll('[data-mini-tab]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.miniTab === activeMiniGame)));
+  const target = $('minigameContent'), identityId = identity;
+  if (!target) return;
+  if (activeMiniGame === 'hangman') {
+    const game = roomGames.hangman, ended = game && game.status !== 'playing';
+    const word = game ? game.masked.join(' ') : '';
+    const letters = game ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(letter => `<button class="hangman-letter" type="button" data-mini-action="hang-guess" data-letter="${letter}" ${game.status !== 'playing' || game.guesses.includes(letter) ? 'disabled' : ''}>${letter}</button>`).join('') : '';
+    target.innerHTML = `<div class="minigame-card"><div class="minigame-card-top"><span class="minigame-icon">⌁</span><div><h3>Hangman</h3><p>Ratete gemeinsam das Wort.</p></div></div>${game ? `<div class="hangman-word" aria-label="Gesuchtes Wort">${word}</div><p class="minigame-status">${game.status === 'won' ? 'Geschafft! Ihr habt das Wort erraten.' : game.status === 'lost' ? `Leider verloren. Das Wort war ${escapeGameText(game.word)}.` : `${game.mistakes} von 7 Fehlversuchen · Buchstaben: ${game.guesses.join(', ') || 'noch keine'}`}</p><div class="hangman-letters">${letters}</div>` : '<p class="minigame-status">Startet eine gemeinsame Runde.</p>'}<button class="primary minigame-primary" type="button" data-mini-action="hang-start" ${game && !ended ? 'disabled' : ''}>${game ? 'Neue Runde' : 'Runde starten'}</button></div>`;
+  } else if (activeMiniGame === 'tictactoe') {
+    const game = roomGames.tictactoe, player = game?.players.find(item => item.identity === identityId), canMove = game?.status === 'playing' && game.turn === identityId && Boolean(player);
+    const turnName = game?.players.find(item => item.identity === game.turn)?.name;
+    const status = !game ? 'Startet ein Spiel und ladet eine Person aus dem Raum ein.' : game.status === 'waiting' ? `${escapeGameText(game.players[0]?.name)} wartet auf einen Mitspieler.` : game.status === 'won' ? `${escapeGameText(game.winner)} hat gewonnen!` : game.status === 'draw' ? 'Unentschieden!' : game.turn === identityId ? 'Du bist dran.' : `${escapeGameText(turnName)} ist dran.`;
+    const board = game ? game.board.map((mark, index) => `<button class="tic-cell" type="button" data-mini-action="ttt-move" data-index="${index}" aria-label="Feld ${index + 1}${mark ? ': ' + mark : ''}" ${!canMove || mark ? 'disabled' : ''}>${mark || ''}</button>`).join('') : '';
+    const join = game?.status === 'waiting' && !player ? '<button class="primary minigame-primary" type="button" data-mini-action="ttt-join">Mitspielen</button>' : '';
+    const start = !game || ['won', 'draw'].includes(game.status) ? `<button class="primary minigame-primary" type="button" data-mini-action="ttt-start">${game ? 'Neue Runde' : 'Spiel starten'}</button>` : '';
+    target.innerHTML = `<div class="minigame-card"><div class="minigame-card-top"><span class="minigame-icon">×</span><div><h3>Tic-Tac-Toe</h3><p>${game?.players.map(item => `${item.mark}: ${escapeGameText(item.name)}`).join(' · ') || 'Spielt zu zweit.'}</p></div></div><p class="minigame-status">${status}</p>${game ? `<div class="tic-board">${board}</div>` : ''}${join}${start}</div>`;
+  } else {
+    const game = roomGames.rps, player = game?.players.find(item => item.identity === identityId), choices = ['Schere', 'Stein', 'Papier'];
+    const canPick = !game || game.status === 'waiting' && !player && game.pickedCount < 2;
+    const choiceButtons = canPick ? `<div class="rps-choices">${choices.map(choice => `<button class="rps-choice" type="button" data-mini-action="rps-pick" data-choice="${choice}"><span>${choice === 'Schere' ? '✂️' : choice === 'Stein' ? '✊' : '✋'}</span>${choice}</button>`).join('')}</div>` : '';
+    const status = !game ? 'Wählt gleichzeitig. Wer zuerst seine Wahl trifft, wartet auf einen Gegner.' : game.status === 'done' ? escapeGameText(game.result) : player ? 'Deine Wahl ist geheim. Warte auf den zweiten Spieler …' : `${escapeGameText(game.players[0]?.name || 'Ein Spieler')} hat gewählt. Wer fordert heraus?`;
+    const revealed = game?.status === 'done' ? `<p class="rps-reveal">${Object.values(game.choices || {}).map(item => `${escapeGameText(item.name)}: ${item.choice}`).join(' · ')}</p><button class="primary minigame-primary" type="button" data-mini-action="rps-next">Nächste Runde</button>` : '';
+    target.innerHTML = `<div class="minigame-card"><div class="minigame-card-top"><span class="minigame-icon">✊</span><div><h3>Schere, Stein, Papier</h3><p>Zwei Mitspieler pro Runde.</p></div></div><p class="minigame-status">${status}</p>${choiceButtons}${revealed}</div>`;
+  }
+}
+$('openMiniGames').addEventListener('click', () => { activeMiniGame = 'hangman'; $('minigamesOverlay').classList.remove('hidden'); renderMiniGame(); });
+$('closeMiniGames').addEventListener('click', () => $('minigamesOverlay').classList.add('hidden'));
+$('minigamesOverlay').addEventListener('click', event => { if (event.target === $('minigamesOverlay')) $('minigamesOverlay').classList.add('hidden'); });
+document.querySelectorAll('[data-mini-tab]').forEach(button => button.addEventListener('click', () => { activeMiniGame = button.dataset.miniTab; renderMiniGame(); }));
+$('minigameContent').addEventListener('click', event => {
+  const button = event.target.closest('[data-mini-action]'); if (!button) return;
+  const action = button.dataset.miniAction;
+  if (action === 'hang-start') sendGameAction('hangman', 'start');
+  else if (action === 'hang-guess') sendGameAction('hangman', 'guess', { letter: button.dataset.letter });
+  else if (action === 'ttt-start') sendGameAction('tictactoe', 'start');
+  else if (action === 'ttt-join') sendGameAction('tictactoe', 'join');
+  else if (action === 'ttt-move') sendGameAction('tictactoe', 'move', { index: button.dataset.index });
+  else if (action === 'rps-pick') sendGameAction('rps', 'pick', { choice: button.dataset.choice });
+  else if (action === 'rps-next') sendGameAction('rps', 'next');
+});
 function scannedRoomCode(value) {
   const raw = String(value || '').trim();
   if (/^\d{6}$/.test(raw)) return raw;
