@@ -457,7 +457,7 @@ function sendVideoSignal(peer, signal) {
   if (socket?.readyState === WebSocket.OPEN && roomCode) socket.send(JSON.stringify({ type: 'videoSignal', toPeerId: peer.peerId, signal }));
 }
 async function negotiateVideoPeer(peer, pc) {
-  if (peer.makingOffer || pc.signalingState === 'closed') return;
+  if (peer.makingOffer || pc.signalingState !== 'stable') return;
   try {
     peer.makingOffer = true; await pc.setLocalDescription();
     sendVideoSignal(peer, { kind: 'description', description: pc.localDescription.toJSON() });
@@ -469,6 +469,7 @@ async function ensureVideoConnection(peer) {
     if (peer.connecting) await peer.connecting;
     if (localCameraStream && peer.transceiver?.sender.track !== localCameraStream.getVideoTracks()[0]) {
       await peer.transceiver.sender.replaceTrack(localCameraStream.getVideoTracks()[0]); peer.transceiver.direction = 'sendrecv';
+      if (peer.pc.signalingState === 'stable') await negotiateVideoPeer(peer, peer.pc);
     }
     return peer;
   }
@@ -481,16 +482,19 @@ async function ensureVideoConnection(peer) {
     pc.onicecandidate = event => { if (event.candidate) sendVideoSignal(peer, { kind: 'candidate', candidate: event.candidate.toJSON() }); };
     pc.ontrack = event => {
       const tile = ensureRemoteCameraTile(peer); tile.tile.classList.remove('waiting');
+      clearTimeout(peer.connectTimer);
       tile.video.srcObject = event.streams[0] || new MediaStream([event.track]); tile.video.play().catch(() => {});
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') $('cameraStatus').textContent = 'Die Videoverbindung zu ' + peer.name + ' konnte nicht aufgebaut werden.';
-      else if (pc.connectionState === 'connected' && localCameraStream) $('cameraStatus').textContent = 'Deine Kamera wird im Raum geteilt. Mikrofon aus.';
+      if (pc.connectionState === 'failed') { clearTimeout(peer.connectTimer); peer.tile?.tile.classList.add('failed'); $('cameraStatus').textContent = 'Keine Videoverbindung zu ' + peer.name + '. Das Netzwerk könnte direkte Videoverbindungen blockieren.'; }
+      else if (pc.connectionState === 'connected') { clearTimeout(peer.connectTimer); peer.tile?.tile.classList.remove('failed'); if (localCameraStream) $('cameraStatus').textContent = 'Deine Kamera wird im Raum geteilt. Mikrofon aus.'; }
     };
     pc.onnegotiationneeded = () => { if (peer.ready && localCameraStream) negotiateVideoPeer(peer, pc); };
     peer.transceiver = transceiver;
     if (localCameraStream) { await transceiver.sender.replaceTrack(localCameraStream.getVideoTracks()[0]); transceiver.direction = 'sendrecv'; }
     peer.ready = true;
+    if (localCameraStream) await negotiateVideoPeer(peer, pc);
+    peer.connectTimer = setTimeout(() => { if (peer.pc === pc && pc.connectionState !== 'connected' && peer.tile) { peer.tile.tile.classList.add('failed'); $('cameraStatus').textContent = 'Die Kamera von ' + peer.name + ' verbindet sich nicht. Prüft eure Netzwerkverbindung.'; } }, 15_000);
     return peer;
   })();
   try { await peer.connecting; } finally { peer.connecting = null; }
