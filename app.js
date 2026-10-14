@@ -445,7 +445,7 @@ function setRoomMedia(media) {
   const player = $('roomMediaPlayer'), external = $('roomMediaExternal'); player.replaceChildren(); external.classList.add('hidden'); external.removeAttribute('href');
   if (!media || !['twitch', 'tiktok'].includes(media.platform) || typeof media.id !== 'string') {
     const message = document.createElement('span'); message.textContent = 'Noch kein Video ausgewählt.'; player.append(message);
-    $('roomMediaStatus').textContent = 'Gib einen Twitch-Kanalnamen oder einen TikTok-Videolink ein.'; $('roomMediaDetails').open = false; return;
+    $('roomMediaStatus').textContent = 'Gib deinen Twitch-Kanal oder TikTok-Videolink ein. Deine Auswahl sehen nur du.'; return;
   }
   let src = '', externalUrl = '';
   if (media.platform === 'twitch' && /^[a-z0-9_]{1,25}$/i.test(media.id)) {
@@ -454,7 +454,7 @@ function setRoomMedia(media) {
     src = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id) + '?autoplay=0&controls=1'; externalUrl = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id);
   } else { $('roomMediaStatus').textContent = 'Dieser Videolink konnte nicht angezeigt werden.'; return; }
   const frame = document.createElement('iframe'); frame.src = src; frame.title = media.platform === 'twitch' ? 'Twitch Livevideo' : 'TikTok-Video'; frame.allow = 'autoplay; fullscreen; picture-in-picture; encrypted-media'; frame.allowFullscreen = true; frame.referrerPolicy = 'strict-origin-when-cross-origin'; player.append(frame);
-  external.href = externalUrl; external.classList.remove('hidden'); $('roomMediaStatus').textContent = 'Das Video wird nur dir auf diesem Gerät angezeigt.'; $('roomMediaDetails').open = true;
+  external.href = externalUrl; external.classList.remove('hidden'); $('roomMediaStatus').textContent = 'Das Video wird nur dir auf diesem Gerät angezeigt.'; $('roomMediaPanel').classList.remove('hidden'); chatWorkspace.classList.add('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'true');
 }
 function shareRoomMedia(event) {
   event.preventDefault();
@@ -463,7 +463,12 @@ function shareRoomMedia(event) {
   setRoomMedia(media);
 }
 $('roomMediaForm').addEventListener('submit', shareRoomMedia);
-$('roomMediaClear').addEventListener('click', () => setRoomMedia(null));
+$('roomMediaToggle').addEventListener('click', () => {
+  if ($('roomMediaPanel').classList.contains('hidden')) { $('roomMediaPanel').classList.remove('hidden'); chatWorkspace.classList.add('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'true'); $('roomMediaInput').focus(); }
+  else closeRoomMediaPanel();
+});
+$('roomMediaClose').addEventListener('click', closeRoomMediaPanel);
+function closeRoomMediaPanel() { setRoomMedia(null); $('roomMediaPanel').classList.add('hidden'); chatWorkspace.classList.remove('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'false'); }
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
@@ -808,7 +813,7 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { if (activeWhisper) closeWhisper(); $('drawOverlay').classList.add('hidden'); activeDrawing = null; $('drawCanvas')._lastPoint = null; clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); setRoomMedia(null); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
+function leaveRoom() { if (activeWhisper) closeWhisper(); $('drawOverlay').classList.add('hidden'); activeDrawing = null; $('drawCanvas')._lastPoint = null; clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); closeRoomMediaPanel(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
 $('create').addEventListener('click', () => connect('create'));
 $('cameraButton').addEventListener('click', () => localCameraStream ? stopRoomCamera(true) : startRoomCamera());
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
