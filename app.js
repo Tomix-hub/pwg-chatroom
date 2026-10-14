@@ -74,7 +74,6 @@ $('assistantLauncher').addEventListener('click', () => {
   else { $('assistantPanel').classList.add('hidden'); $('assistantLauncher').setAttribute('aria-expanded', 'false'); }
 });
 $('homeAssistantButton').addEventListener('click', openAssistant);
-$('roomAssistantButton').addEventListener('click', openAssistant);
 $('assistantClose').addEventListener('click', () => { $('assistantPanel').classList.add('hidden'); $('assistantPanel').classList.remove('assistant-expanded'); $('assistantLauncher').setAttribute('aria-expanded', 'false'); $('assistantExpand').textContent = '⛶'; $('assistantExpand').setAttribute('aria-label', 'Fenster vergrößern'); });
 $('assistantExpand').addEventListener('click', () => {
   const expanded = $('assistantPanel').classList.toggle('assistant-expanded');
