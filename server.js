@@ -301,7 +301,7 @@ wss.on('connection', (socket) => {
         const roomName = String(data.roomName || '').trim().slice(0, 32);
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
         let code; do { code = randomInt(0, 1_000_000).toString().padStart(6, '0'); } while (rooms.has(code));
-        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
+        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map(), drawBoards: new Map() });
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined; const room = rooms.get(code);
         const peers = [...room.clients].filter(client => client.joined).map(client => ({ peerId: client.videoPeerId, identity: client.joined.identity, name: client.joined.name, videoActive: Boolean(client.videoActive) }));
         room.clients.add(socket);
@@ -335,6 +335,39 @@ wss.on('connection', (socket) => {
         if (client.readyState !== 1) continue;
         const viewer = client.joined?.identity || client.directIdentity || client.inboxIdentity;
         if (viewer === fromIdentity || viewer === toIdentity) client.send(JSON.stringify({ type: 'whisper', withIdentity: viewer === fromIdentity ? toIdentity : fromIdentity, message }));
+      }
+    } else if (data.type === 'drawOpen' && joined) {
+      const room = rooms.get(joined.code), targetIdentity = String(data.targetIdentity || '');
+      if (!room || !/^[a-f0-9-]{36}$/i.test(targetIdentity) || targetIdentity === joined.identity) return;
+      const target = [...room.clients].find(client => client.joined?.identity === targetIdentity && client.readyState === 1);
+      if (!target) return socket.send(JSON.stringify({ type: 'drawError', message: 'Diese Person ist gerade nicht mehr im Raum.' }));
+      room.drawBoards ||= new Map();
+      while (room.drawBoards.size >= 30) room.drawBoards.delete(room.drawBoards.keys().next().value);
+      const boardId = randomUUID(), board = { id: boardId, identities: new Set([joined.identity, targetIdentity]), strokes: [] };
+      room.drawBoards.set(boardId, board);
+      for (const client of room.clients) {
+        if (client.readyState !== 1 || !board.identities.has(client.joined?.identity)) continue;
+        const partner = getUser(client.joined.identity === joined.identity ? targetIdentity : joined.identity);
+        client.send(JSON.stringify({ type: 'drawOpen', boardId, withIdentity: partner?.identity, withName: partner?.name || 'Mitglied' }));
+      }
+    } else if ((data.type === 'drawStroke' || data.type === 'drawClear') && joined) {
+      const room = rooms.get(joined.code), boardId = String(data.boardId || ''), board = room?.drawBoards?.get(boardId);
+      if (!board || !board.identities.has(joined.identity)) return;
+      if (data.type === 'drawClear') {
+        board.strokes.length = 0;
+        for (const client of room.clients) if (client.readyState === 1 && board.identities.has(client.joined?.identity)) client.send(JSON.stringify({ type: 'drawClear', boardId }));
+      } else {
+        const stroke = data.stroke, color = String(stroke?.color || ''), size = Number(stroke?.size), points = stroke?.points;
+        if (!/^#[0-9a-f]{6}$/i.test(color) || !Number.isFinite(size) || size < 1 || size > 32 || !Array.isArray(points) || points.length < 1 || points.length > 20) return;
+        const safePoints = [];
+        for (const point of points) {
+          const x = Number(point?.x), y = Number(point?.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          safePoints.push({ x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) });
+        }
+        const safeStroke = { color, size, points: safePoints, fromIdentity: joined.identity };
+        board.strokes.push(safeStroke); if (board.strokes.length > 5000) board.strokes.shift();
+        for (const client of room.clients) if (client.readyState === 1 && board.identities.has(client.joined?.identity)) client.send(JSON.stringify({ type: 'drawStroke', boardId, stroke: safeStroke }));
       }
     } else if (data.type === 'videoState' && joined) {
       const room = rooms.get(joined.code); if (!room) return;

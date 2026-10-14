@@ -10,7 +10,7 @@ const homeworkCatalog = [
   ['geschichte-erben', 'Geschichte', 'Herr Erben'], ['geschichte-kues', 'Geschichte', 'Frau Kues'], ['franzoesisch-kues', 'Französisch', 'Frau Kues'],
   ['chemie-misselwitz', 'Chemie', 'Herr Misselwitz'], ['philosophie-wenzler', 'Philosophie', 'Frau Wenzler'], ['sowi-hillebrand', 'SoWi', 'Herr Hillebrand']
 ].map(([id, subject, teacher]) => ({ id, subject, teacher }));
-let activeHomeworkFolder = null, homeworkReturnTo = 'home', homeworkRefreshTimer = null, homeworkLatestTime = '', homeworkImageData = '', friendRefreshTimer = null, activeOtherProfile = null;
+let activeHomeworkFolder = null, homeworkReturnTo = 'home', homeworkRefreshTimer = null, homeworkLatestTime = '', homeworkImageData = '', friendRefreshTimer = null, activeOtherProfile = null, activeDrawing = null;
 const ownReceipts = new Map();
 const readObserver = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting && entry.intersectionRatio >= 0.65) {
@@ -358,6 +358,25 @@ $('closeProfile').addEventListener('click', () => $('profileOverlay').classList.
 $('closeOtherProfile').addEventListener('click', () => $('otherProfileOverlay').classList.add('hidden'));
 $('otherProfileOverlay').addEventListener('click', event => { if (event.target === $('otherProfileOverlay')) $('otherProfileOverlay').classList.add('hidden'); });
 $('otherProfileWhisper').addEventListener('click', () => { const target = activeOtherProfile; $('otherProfileOverlay').classList.add('hidden'); if (target) openWhisper(target.identity, target.name); });
+$('otherProfileDraw').addEventListener('click', () => {
+  if (!activeOtherProfile || !roomCode || socket?.readyState !== WebSocket.OPEN) { $('otherProfileStatus').textContent = 'Du musst mit dieser Person in einem Raum sein.'; return; }
+  socket.send(JSON.stringify({ type: 'drawOpen', targetIdentity: activeOtherProfile.identity }));
+  $('otherProfileStatus').textContent = 'Die gemeinsame Zeichenfläche wird geöffnet …';
+});
+$('closeDraw').addEventListener('click', () => $('drawOverlay').classList.add('hidden'));
+$('drawOverlay').addEventListener('click', event => { if (event.target === $('drawOverlay')) $('drawOverlay').classList.add('hidden'); });
+$('drawClear').addEventListener('click', () => { if (activeDrawing && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'drawClear', boardId: activeDrawing.boardId })); });
+$('drawCanvas').addEventListener('pointerdown', event => {
+  if (!activeDrawing || socket?.readyState !== WebSocket.OPEN) return;
+  const point = drawingPoint(event); event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget._lastPoint = point;
+  sendDrawSegment([point]);
+});
+$('drawCanvas').addEventListener('pointermove', event => {
+  const canvas = event.currentTarget, previous = canvas._lastPoint;
+  if (!previous || !activeDrawing) return;
+  const next = drawingPoint(event); canvas._lastPoint = next; sendDrawSegment([previous, next]);
+});
+for (const eventName of ['pointerup', 'pointercancel', 'lostpointercapture']) $('drawCanvas').addEventListener(eventName, event => { event.currentTarget._lastPoint = null; });
 $('otherProfileAddFriend').addEventListener('click', async () => {
   if (!activeOtherProfile) return;
   const button = $('otherProfileAddFriend'), status = $('otherProfileStatus'), target = activeOtherProfile; button.disabled = true; status.textContent = 'Wird gesendet …';
@@ -425,6 +444,10 @@ function connect(action) {
     if (data.type === 'videoPeerUp') { if (!videoPeers.has(data.peerId)) addRoomVideoPeer({ ...data, videoActive: true }); setRoomPeerCamera(data.peerId, true, data.name); }
     if (data.type === 'videoPeerDown') setRoomPeerCamera(data.peerId, false, data.name);
     if (data.type === 'videoSignal') handleVideoSignal(data).catch(err => console.warn('Kamera-Signal fehlgeschlagen.', err));
+    if (data.type === 'drawOpen') openDrawing(data);
+    if (data.type === 'drawStroke') receiveDrawingStroke(data);
+    if (data.type === 'drawClear' && activeDrawing?.boardId === data.boardId) { activeDrawing.strokes = []; paintDrawingCanvas(); }
+    if (data.type === 'drawError') $('otherProfileStatus').textContent = data.message;
     if (data.type === 'roomPeerLeft') removeRoomVideoPeer(data.peerId);
     if (data.type === 'message' || data.type === 'image') renderMessage(data);
     if (data.type === 'avatarUpdate') document.querySelectorAll('.bubble[data-identity="' + CSS.escape(data.identity) + '"] .sender-avatar').forEach(element => updateAvatarElement(element, data.avatar, data.name));
@@ -627,6 +650,7 @@ async function openOtherProfile(targetIdentity, targetName, avatar) {
   if (!targetIdentity || targetIdentity === identity || !myProfile) return;
   activeOtherProfile = { identity: targetIdentity, name: targetName, avatar };
   $('otherProfileName').textContent = targetName; updateAvatarElement($('otherProfileAvatar'), avatar, targetName);
+  $('otherProfileDraw').classList.toggle('hidden', !roomCode || socket?.readyState !== WebSocket.OPEN);
   const button = $('otherProfileAddFriend'), status = $('otherProfileStatus'); button.disabled = true; button.textContent = 'Wird geladen …'; status.textContent = '';
   $('otherProfileOverlay').classList.remove('hidden');
   try {
@@ -638,6 +662,47 @@ async function openOtherProfile(targetIdentity, targetName, avatar) {
     else { button.textContent = 'Freundschaftsanfrage senden'; button.disabled = false; }
   } catch (err) { if (activeOtherProfile?.identity === targetIdentity) { button.textContent = 'Freundschaftsanfrage senden'; button.disabled = false; status.textContent = err.message; } }
 }
+function openDrawing(data) {
+  activeDrawing = { boardId: data.boardId, withName: data.withName || 'Mitglied', strokes: [] };
+  $('drawSubtitle').textContent = 'Gemeinsam mit ' + activeDrawing.withName + ' · Striche werden live geteilt.';
+  $('drawStatus').textContent = '';
+  $('otherProfileOverlay').classList.add('hidden'); $('drawOverlay').classList.remove('hidden');
+  requestAnimationFrame(paintDrawingCanvas);
+}
+function drawingPoint(event) {
+  const bounds = event.currentTarget.getBoundingClientRect();
+  return { x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)), y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)) };
+}
+function sendDrawSegment(points) {
+  if (!activeDrawing || socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'drawStroke', boardId: activeDrawing.boardId, stroke: { color: $('drawColor').value, size: Number($('drawSize').value), points } }));
+}
+function receiveDrawingStroke(data) {
+  if (!activeDrawing || activeDrawing.boardId !== data.boardId || !data.stroke) return;
+  activeDrawing.strokes.push(data.stroke); if (activeDrawing.strokes.length > 5000) activeDrawing.strokes.shift();
+  paintDrawingStroke(data.stroke);
+}
+function paintDrawingCanvas() {
+  const canvas = $('drawCanvas'), rect = canvas.getBoundingClientRect(); if (!rect.width || !rect.height) return;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2), width = Math.round(rect.width * ratio), height = Math.round(rect.height * ratio);
+  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+  const context = canvas.getContext('2d'); context.setTransform(ratio, 0, 0, ratio, 0, 0); context.fillStyle = '#fff'; context.fillRect(0, 0, rect.width, rect.height);
+  for (const stroke of activeDrawing?.strokes || []) drawStrokeOnCanvas(context, stroke, rect.width, rect.height);
+}
+function paintDrawingStroke(stroke) {
+  const canvas = $('drawCanvas'), rect = canvas.getBoundingClientRect(); if (!rect.width || !rect.height) return;
+  const context = canvas.getContext('2d'), ratio = Math.min(window.devicePixelRatio || 1, 2);
+  context.setTransform(ratio, 0, 0, ratio, 0, 0); drawStrokeOnCanvas(context, stroke, rect.width, rect.height);
+}
+function drawStrokeOnCanvas(context, stroke, width, height) {
+  const points = stroke.points || []; if (!points.length) return;
+  context.strokeStyle = stroke.color; context.fillStyle = stroke.color; context.lineWidth = stroke.size; context.lineCap = 'round'; context.lineJoin = 'round';
+  if (points.length === 1) { context.beginPath(); context.arc(points[0].x * width, points[0].y * height, stroke.size / 2, 0, Math.PI * 2); context.fill(); return; }
+  context.beginPath(); context.moveTo(points[0].x * width, points[0].y * height);
+  for (let i = 1; i < points.length; i++) context.lineTo(points[i].x * width, points[i].y * height);
+  context.stroke();
+}
+window.addEventListener('resize', () => { if (activeDrawing && !$('drawOverlay').classList.contains('hidden')) paintDrawingCanvas(); });
 function closeWhisper() {
   activeWhisper = null; chatWorkspace.classList.remove('has-whisper'); $('privateChat').classList.add('hidden'); $('privateMessages').replaceChildren();
   if (!roomCode) { chatWorkspace.classList.remove('whisper-only'); chat.classList.remove('hidden'); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); if (whisperSocket && !whisperSocket.isInbox) { whisperSocket.close(); whisperSocket = null; } connectWhisperInbox(); }
@@ -700,7 +765,7 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { if (activeWhisper) closeWhisper(); clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
+function leaveRoom() { if (activeWhisper) closeWhisper(); $('drawOverlay').classList.add('hidden'); activeDrawing = null; $('drawCanvas')._lastPoint = null; clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
 $('create').addEventListener('click', () => connect('create'));
 $('cameraButton').addEventListener('click', () => localCameraStream ? stopRoomCamera(true) : startRoomCamera());
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
