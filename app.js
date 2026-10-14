@@ -65,11 +65,16 @@ async function sendAssistantMessage(event) {
 }
 renderAssistantMessages();
 if (assistantMessages.length) $('assistantLauncher').textContent = '✦ ChatGPT';
-$('assistantLauncher').addEventListener('click', async () => {
-  const panel = $('assistantPanel'), open = panel.classList.toggle('hidden');
-  $('assistantLauncher').setAttribute('aria-expanded', String(!open));
-  if (!open) { await configureAssistant(); if (!assistantConfigured) $('assistantInput').disabled = true; else $('assistantInput').focus(); }
+async function openAssistant() {
+  $('assistantPanel').classList.remove('hidden'); $('assistantLauncher').setAttribute('aria-expanded', 'true');
+  await configureAssistant(); if (assistantConfigured) $('assistantInput').focus();
+}
+$('assistantLauncher').addEventListener('click', () => {
+  if ($('assistantPanel').classList.contains('hidden')) openAssistant();
+  else { $('assistantPanel').classList.add('hidden'); $('assistantLauncher').setAttribute('aria-expanded', 'false'); }
 });
+$('homeAssistantButton').addEventListener('click', openAssistant);
+$('roomAssistantButton').addEventListener('click', openAssistant);
 $('assistantClose').addEventListener('click', () => { $('assistantPanel').classList.add('hidden'); $('assistantPanel').classList.remove('assistant-expanded'); $('assistantLauncher').setAttribute('aria-expanded', 'false'); $('assistantExpand').textContent = '⛶'; $('assistantExpand').setAttribute('aria-label', 'Fenster vergrößern'); });
 $('assistantExpand').addEventListener('click', () => {
   const expanded = $('assistantPanel').classList.toggle('assistant-expanded');
