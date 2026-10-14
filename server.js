@@ -357,15 +357,15 @@ wss.on('connection', (socket) => {
         board.strokes.length = 0;
         for (const client of room.clients) if (client.readyState === 1 && board.identities.has(client.joined?.identity)) client.send(JSON.stringify({ type: 'drawClear', boardId }));
       } else {
-        const stroke = data.stroke, color = String(stroke?.color || ''), size = Number(stroke?.size), points = stroke?.points;
-        if (!/^#[0-9a-f]{6}$/i.test(color) || !Number.isFinite(size) || size < 1 || size > 32 || !Array.isArray(points) || points.length < 1 || points.length > 20) return;
+        const stroke = data.stroke, color = String(stroke?.color || ''), size = Number(stroke?.size), tool = String(stroke?.tool || 'pencil'), points = stroke?.points;
+        if (!/^#[0-9a-f]{6}$/i.test(color) || !Number.isFinite(size) || size < 1 || size > 32 || !['pencil', 'marker', 'highlighter', 'eraser'].includes(tool) || !Array.isArray(points) || points.length < 1 || points.length > 20) return;
         const safePoints = [];
         for (const point of points) {
           const x = Number(point?.x), y = Number(point?.y);
           if (!Number.isFinite(x) || !Number.isFinite(y)) return;
           safePoints.push({ x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) });
         }
-        const safeStroke = { color, size, points: safePoints, fromIdentity: joined.identity };
+        const safeStroke = { color, size, tool, points: safePoints, fromIdentity: joined.identity };
         board.strokes.push(safeStroke); if (board.strokes.length > 5000) board.strokes.shift();
         for (const client of room.clients) if (client.readyState === 1 && board.identities.has(client.joined?.identity)) client.send(JSON.stringify({ type: 'drawStroke', boardId, stroke: safeStroke }));
       }

@@ -675,7 +675,7 @@ function drawingPoint(event) {
 }
 function sendDrawSegment(points) {
   if (!activeDrawing || socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: 'drawStroke', boardId: activeDrawing.boardId, stroke: { color: $('drawColor').value, size: Number($('drawSize').value), points } }));
+  socket.send(JSON.stringify({ type: 'drawStroke', boardId: activeDrawing.boardId, stroke: { color: $('drawColor').value, size: Number($('drawSize').value), tool: $('drawTool').value, points } }));
 }
 function receiveDrawingStroke(data) {
   if (!activeDrawing || activeDrawing.boardId !== data.boardId || !data.stroke) return;
@@ -696,11 +696,15 @@ function paintDrawingStroke(stroke) {
 }
 function drawStrokeOnCanvas(context, stroke, width, height) {
   const points = stroke.points || []; if (!points.length) return;
-  context.strokeStyle = stroke.color; context.fillStyle = stroke.color; context.lineWidth = stroke.size; context.lineCap = 'round'; context.lineJoin = 'round';
-  if (points.length === 1) { context.beginPath(); context.arc(points[0].x * width, points[0].y * height, stroke.size / 2, 0, Math.PI * 2); context.fill(); return; }
+  const tool = ['pencil', 'marker', 'highlighter', 'eraser'].includes(stroke.tool) ? stroke.tool : 'pencil';
+  context.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+  context.globalAlpha = tool === 'highlighter' ? 0.28 : tool === 'marker' ? 0.78 : 1;
+  context.strokeStyle = stroke.color; context.fillStyle = stroke.color; context.lineWidth = stroke.size * (tool === 'eraser' || tool === 'highlighter' ? 2.5 : tool === 'marker' ? 1.5 : 0.65); context.lineCap = 'round'; context.lineJoin = 'round';
+  if (points.length === 1) { context.beginPath(); context.arc(points[0].x * width, points[0].y * height, context.lineWidth / 2, 0, Math.PI * 2); context.fill(); context.globalCompositeOperation = 'source-over'; context.globalAlpha = 1; return; }
   context.beginPath(); context.moveTo(points[0].x * width, points[0].y * height);
   for (let i = 1; i < points.length; i++) context.lineTo(points[i].x * width, points[i].y * height);
   context.stroke();
+  context.globalCompositeOperation = 'source-over'; context.globalAlpha = 1;
 }
 window.addEventListener('resize', () => { if (activeDrawing && !$('drawOverlay').classList.contains('hidden')) paintDrawingCanvas(); });
 function closeWhisper() {
