@@ -141,8 +141,11 @@ const server = http.createServer(async (req, res) => {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) {
-          console.error('OpenAI API request failed:', response.status, result.error?.code || result.error?.type || 'unknown');
-          if (response.status === 429) return send(res, 429, { error: 'Der KI-Dienst ist gerade ausgelastet. Bitte versuche es später erneut.' });
+          const apiErrorCode = String(result.error?.code || result.error?.type || 'unknown');
+          console.error('OpenAI API request failed:', response.status, apiErrorCode);
+          if (response.status === 429 && ['insufficient_quota', 'credit_balance_exhausted', 'organization_usage_limit_exceeded', 'organization_spend_limit_exceeded', 'project_spend_limit_exceeded', 'billing_hard_limit_reached'].includes(apiErrorCode)) return send(res, 429, { error: 'Das OpenAI-API-Guthaben ist leer oder ein Ausgabenlimit erreicht. Prüfe das API-Guthaben und die Limits in deinem OpenAI-Platform-Konto.' });
+          if (response.status === 429) return send(res, 429, { error: 'OpenAI hat vorübergehend ein Anfrage-Limit erreicht. Warte kurz und versuche es dann erneut.' });
+          if (response.status === 401) return send(res, 502, { error: 'Der API-Schlüssel wird von OpenAI nicht akzeptiert. Prüfe OPENAI_API_KEY in Render.' });
           return send(res, 502, { error: 'Die KI konnte gerade nicht antworten. Prüfe den API-Schlüssel oder versuche es später erneut.' });
         }
         const answer = (result.output || []).flatMap(item => item.content || []).filter(item => item.type === 'output_text').map(item => item.text || '').join('').trim();
