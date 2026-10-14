@@ -458,7 +458,7 @@ function setRoomMedia(media) {
 }
 function shareRoomMedia(event) {
   event.preventDefault();
-  if ($('roomMediaPlatform').value === 'tiktok-fyp') { window.open('https://www.tiktok.com/foryou', '_blank', 'noopener,noreferrer'); $('roomMediaStatus').textContent = 'Der normale TikTok-FYP wurde in einem neuen Tab geöffnet.'; return; }
+  if ($('roomMediaPlatform').value === 'tiktok-fyp') { $('roomMediaStatus').textContent = 'TikTok erlaubt nicht, den persönlichen FYP in PWG Chatroom einzubetten. Einzelne TikTok-Videos kannst du hier im Player ansehen.'; return; }
   const media = getRoomMedia($('roomMediaPlatform').value, $('roomMediaInput').value);
   if (!media) { $('roomMediaStatus').textContent = $('roomMediaPlatform').value === 'twitch' ? 'Gib einen gültigen Twitch-Kanalnamen ein.' : 'Füge einen vollständigen TikTok-Link zu einem Video ein.'; return; }
   setRoomMedia(media);
@@ -466,7 +466,7 @@ function shareRoomMedia(event) {
 $('roomMediaPlatform').addEventListener('change', () => {
   const isFyp = $('roomMediaPlatform').value === 'tiktok-fyp'; $('roomMediaInput').disabled = isFyp;
   $('roomMediaInput').placeholder = isFyp ? 'TikTok-FYP wird direkt geöffnet' : 'Twitch-Kanal oder TikTok-Link';
-  $('roomMediaSubmit').textContent = isFyp ? 'FYP öffnen ↗' : 'Ansehen';
+  $('roomMediaSubmit').textContent = isFyp ? 'Warum?' : 'Ansehen';
 });
 $('roomMediaForm').addEventListener('submit', shareRoomMedia);
 $('roomMediaToggle').addEventListener('click', () => {
