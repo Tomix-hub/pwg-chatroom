@@ -7,11 +7,15 @@ const webpush = require('web-push');
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
+const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || '');
+const OPENAI_MODEL = String(process.env.OPENAI_MODEL || 'gpt-5-mini');
 const VAPID_PUBLIC_KEY = String(process.env.VAPID_PUBLIC_KEY || '');
 const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || '');
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@pwg-chatroom.onrender.com', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 const rooms = new Map();
 const whispers = new Map();
+const assistantUserUsage = new Map();
+let assistantDailyUsage = { day: new Date().toISOString().slice(0, 10), count: 0 };
 const homeworkFolders = [
   ['englisch-sude', 'Englisch', 'Frau Sude'], ['mathe-funk', 'Mathe', 'Frau Funk'], ['kunst-wenzler', 'Kunst', 'Frau Wenzler'], ['sport-debus', 'Sport', 'Herr Debus'],
   ['englisch-adler', 'Englisch', 'Frau Adler'], ['mathe-schindler', 'Mathe', 'Herr Schindler'], ['kunst-sapcanovic', 'Kunst', 'Frau Sapcanovic'], ['sport-halve', 'Sport', 'Herr Halve'],
@@ -115,7 +119,40 @@ const server = http.createServer(async (req, res) => {
       user = { identity, name, contacts: [], friends: [] }; database.users[identity] = user; saveDatabase(); return send(res, 201, userSummary(user));
     }
     if (req.method === 'GET' && url.pathname === '/api/push/config') return send(res, 200, { enabled: Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY), publicKey: VAPID_PUBLIC_KEY || '' });
+    if (req.method === 'GET' && url.pathname === '/api/assistant/config') return send(res, 200, { enabled: Boolean(OPENAI_API_KEY) });
     if (!user) return send(res, 401, { error: 'Profil nicht gefunden. Bitte wähle deinen Namen erneut.' });
+    if (req.method === 'POST' && url.pathname === '/api/assistant') {
+      if (!OPENAI_API_KEY) return send(res, 503, { error: 'Der KI-Chat ist noch nicht eingerichtet. Der Betreiber muss den API-Schlüssel in Render hinterlegen.' });
+      const messages = Array.isArray(data.messages) ? data.messages.slice(-8) : [];
+      const input = messages.map(message => ({ role: message?.role === 'assistant' ? 'assistant' : 'user', content: String(message?.content || '').trim().slice(0, 1000) })).filter(message => message.content);
+      if (!input.length || input.at(-1).role !== 'user') return send(res, 400, { error: 'Schreibe zuerst eine Nachricht.' });
+      if (input.reduce((sum, message) => sum + message.content.length, 0) > 9000) return send(res, 413, { error: 'Der Chatverlauf ist zu lang. Starte bitte einen neuen Chat.' });
+      const today = new Date().toISOString().slice(0, 10);
+      if (assistantDailyUsage.day !== today) assistantDailyUsage = { day: today, count: 0 };
+      const now = Date.now(), recent = (assistantUserUsage.get(user.identity) || []).filter(time => now - time < 60_000);
+      if (recent.length >= 5) return send(res, 429, { error: 'Du hast gerade viele Fragen gestellt. Warte kurz und versuche es dann erneut.' });
+      if (assistantDailyUsage.count >= 80) return send(res, 429, { error: 'Der KI-Chat hat sein Tageslimit erreicht. Bitte versuche es morgen erneut.' });
+      recent.push(now); assistantUserUsage.set(user.identity, recent); assistantDailyUsage.count++;
+      try {
+        const response = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST', signal: AbortSignal.timeout(45_000),
+          headers: { Authorization: 'Bearer ' + OPENAI_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: OPENAI_MODEL, instructions: 'Du bist die hilfreiche KI-Hilfe im PWG Chatroom. Antworte freundlich, klar und knapp auf Deutsch. Erkläre schulische Themen verständlich. Erfinde keine Fakten und sage offen, wenn du etwas nicht weißt.', input, max_output_tokens: 500, store: false })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          console.error('OpenAI API request failed:', response.status, result.error?.code || result.error?.type || 'unknown');
+          if (response.status === 429) return send(res, 429, { error: 'Der KI-Dienst ist gerade ausgelastet. Bitte versuche es später erneut.' });
+          return send(res, 502, { error: 'Die KI konnte gerade nicht antworten. Prüfe den API-Schlüssel oder versuche es später erneut.' });
+        }
+        const answer = (result.output || []).flatMap(item => item.content || []).filter(item => item.type === 'output_text').map(item => item.text || '').join('').trim();
+        if (!answer) return send(res, 502, { error: 'Die KI hat gerade keine Textantwort geliefert. Bitte versuche es erneut.' });
+        return send(res, 200, { answer });
+      } catch (error) {
+        console.error('OpenAI API request failed:', error.name || 'network_error');
+        return send(res, 502, { error: error.name === 'TimeoutError' ? 'Die Antwort dauert zu lange. Bitte versuche es erneut.' : 'Der KI-Dienst ist gerade nicht erreichbar.' });
+      }
+    }
     if (req.method === 'POST' && url.pathname === '/api/push/subscribe') {
       if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return send(res, 503, { error: 'Push-Mitteilungen sind noch nicht auf dem Server eingerichtet.' });
       if (!isValidPushSubscription(data.subscription)) return send(res, 400, { error: 'Das Gerät konnte nicht für Mitteilungen registriert werden.' });
