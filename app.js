@@ -41,27 +41,14 @@ function renderAssistantMessages() {
 }
 async function configureAssistant() {
   const status = $('assistantStatus'), input = $('assistantInput'), sendButton = $('assistantSend');
-  if (assistantConfigured !== null) return assistantConfigured;
-  status.textContent = 'ChatGPT wird verbunden …';
-  try {
-    const result = await api('/api/assistant/config'); assistantConfigured = Boolean(result.enabled);
-    if (!assistantConfigured) { status.textContent = 'Der Betreiber muss OPENAI_API_KEY in den Render-Umgebungsvariablen eintragen.'; input.disabled = true; sendButton.disabled = true; }
-    else { status.textContent = ''; input.disabled = false; sendButton.disabled = false; }
-  } catch (error) { assistantConfigured = false; status.textContent = error.message || 'Der KI-Chat ist gerade nicht erreichbar.'; }
-  return assistantConfigured;
+  assistantConfigured = false;
+  status.textContent = 'Der Chat im PWG-Fenster ist ausgeschaltet, damit keine API-Kosten entstehen.';
+  input.disabled = true; sendButton.disabled = true;
+  $('assistantExternalLink').classList.remove('hidden');
+  return false;
 }
 async function sendAssistantMessage(event) {
-  event.preventDefault(); const input = $('assistantInput'), button = $('assistantSend'), status = $('assistantStatus'), text = input.value.trim();
-  if (!text || button.disabled) return;
-  if (!myProfile) { status.textContent = 'Erstelle zuerst dein Profil, um ChatGPT zu benutzen.'; return; }
-  if (!(await configureAssistant())) return;
-  assistantMessages.push({ role: 'user', content: text }); assistantMessages = assistantMessages.slice(-24); saveAssistantMessages(); renderAssistantMessages();
-  input.value = ''; input.disabled = true; button.disabled = true; status.textContent = 'ChatGPT antwortet …';
-  try {
-    const result = await api('/api/assistant', { method: 'POST', body: JSON.stringify({ messages: assistantMessages.slice(-8) }) });
-    assistantMessages.push({ role: 'assistant', content: result.answer }); assistantMessages = assistantMessages.slice(-24); saveAssistantMessages(); renderAssistantMessages(); status.textContent = '';
-  } catch (error) { status.textContent = error.message || 'ChatGPT konnte gerade nicht antworten.'; }
-  finally { input.disabled = false; button.disabled = false; input.focus(); }
+  event.preventDefault();
 }
 renderAssistantMessages();
 if (assistantMessages.length) $('assistantLauncher').textContent = '✦ ChatGPT';
@@ -80,7 +67,7 @@ $('assistantExpand').addEventListener('click', () => {
   $('assistantExpand').textContent = expanded ? '↙' : '⛶'; $('assistantExpand').setAttribute('aria-label', expanded ? 'Fenster verkleinern' : 'Fenster vergrößern');
 });
 $('assistantForm').addEventListener('submit', sendAssistantMessage);
-$('assistantNewChat').addEventListener('click', () => { assistantMessages = []; saveAssistantMessages(); renderAssistantMessages(); $('assistantStatus').textContent = ''; $('assistantInput').focus(); });
+$('assistantNewChat').addEventListener('click', () => { assistantMessages = []; saveAssistantMessages(); renderAssistantMessages(); $('assistantStatus').textContent = 'Der Chat im PWG-Fenster ist ausgeschaltet, damit keine API-Kosten entstehen.'; });
 function decodePushKey(value) { const padded = (value + '='.repeat((4 - value.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(padded), char => char.charCodeAt(0)); }
 async function updateNotificationControls() {
   const button = $('notificationsButton'), status = $('notificationStatus');
