@@ -445,7 +445,7 @@ function setRoomMedia(media) {
   const player = $('roomMediaPlayer'), external = $('roomMediaExternal'); player.replaceChildren(); external.classList.add('hidden'); external.removeAttribute('href');
   if (!media || !['twitch', 'tiktok'].includes(media.platform) || typeof media.id !== 'string') {
     const message = document.createElement('span'); message.textContent = 'Noch kein Video ausgewählt.'; player.append(message);
-    $('roomMediaStatus').textContent = 'Gib deinen Twitch-Kanal oder TikTok-Videolink ein. Deine Auswahl sehen nur du.'; return;
+    $('roomMediaStatus').textContent = 'Gib deinen Twitch-Kanal oder TikTok-Videolink ein. Deine Auswahl sehen nur du.'; $('roomMediaPanel').classList.remove('is-playing'); return;
   }
   let src = '', externalUrl = '';
   if (media.platform === 'twitch' && /^[a-z0-9_]{1,25}$/i.test(media.id)) {
@@ -454,14 +454,20 @@ function setRoomMedia(media) {
     src = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id) + '?autoplay=0&controls=1'; externalUrl = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id);
   } else { $('roomMediaStatus').textContent = 'Dieser Videolink konnte nicht angezeigt werden.'; return; }
   const frame = document.createElement('iframe'); frame.src = src; frame.title = media.platform === 'twitch' ? 'Twitch Livevideo' : 'TikTok-Video'; frame.allow = 'autoplay; fullscreen; picture-in-picture; encrypted-media'; frame.allowFullscreen = true; frame.referrerPolicy = 'strict-origin-when-cross-origin'; player.append(frame);
-  external.href = externalUrl; external.classList.remove('hidden'); $('roomMediaStatus').textContent = 'Das Video wird nur dir auf diesem Gerät angezeigt.'; $('roomMediaPanel').classList.remove('hidden'); chatWorkspace.classList.add('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'true');
+  external.href = externalUrl; external.classList.remove('hidden'); $('roomMediaStatus').textContent = 'Das Video wird nur dir auf diesem Gerät angezeigt.'; $('roomMediaPanel').classList.remove('hidden'); $('roomMediaPanel').classList.add('is-playing'); chatWorkspace.classList.add('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'true');
 }
 function shareRoomMedia(event) {
   event.preventDefault();
+  if ($('roomMediaPlatform').value === 'tiktok-fyp') { window.open('https://www.tiktok.com/foryou', '_blank', 'noopener,noreferrer'); $('roomMediaStatus').textContent = 'Der normale TikTok-FYP wurde in einem neuen Tab geöffnet.'; return; }
   const media = getRoomMedia($('roomMediaPlatform').value, $('roomMediaInput').value);
   if (!media) { $('roomMediaStatus').textContent = $('roomMediaPlatform').value === 'twitch' ? 'Gib einen gültigen Twitch-Kanalnamen ein.' : 'Füge einen vollständigen TikTok-Link zu einem Video ein.'; return; }
   setRoomMedia(media);
 }
+$('roomMediaPlatform').addEventListener('change', () => {
+  const isFyp = $('roomMediaPlatform').value === 'tiktok-fyp'; $('roomMediaInput').disabled = isFyp;
+  $('roomMediaInput').placeholder = isFyp ? 'TikTok-FYP wird direkt geöffnet' : 'Twitch-Kanal oder TikTok-Link';
+  $('roomMediaSubmit').textContent = isFyp ? 'FYP öffnen ↗' : 'Ansehen';
+});
 $('roomMediaForm').addEventListener('submit', shareRoomMedia);
 $('roomMediaToggle').addEventListener('click', () => {
   if ($('roomMediaPanel').classList.contains('hidden')) { $('roomMediaPanel').classList.remove('hidden'); chatWorkspace.classList.add('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'true'); $('roomMediaInput').focus(); }
