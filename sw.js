@@ -1,9 +1,9 @@
-const CACHE_NAME = 'pwg-chatroom-shell-v42';
+const CACHE_NAME = 'pwg-chatroom-shell-v43';
 const APP_SHELL = [
   '/',
   '/index.html',
-  '/style.css?v=notifications2',
-  '/app.js?v=notifications4',
+  '/style.css?v=video1',
+  '/app.js?v=video1',
   '/manifest.webmanifest',
   '/icon-192.png',
   '/icon-512.png',

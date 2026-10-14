@@ -279,6 +279,7 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ server, maxPayload: 800 * 1024 });
 wss.on('connection', (socket) => {
   let joined = null;
+  socket.videoPeerId = randomUUID();
   socket.on('message', (raw) => {
     let data; try { data = JSON.parse(raw.toString()); } catch { return; }
     if (data.type === 'join' || data.type === 'create') {
@@ -290,15 +291,23 @@ wss.on('connection', (socket) => {
         if (!/^[0-9]{6}$/.test(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen gültigen Raumcode ein.' }));
         if (!rooms.has(code)) return socket.send(JSON.stringify({ type: 'error', message: 'Diesen Raum gibt es nicht. Prüfe den Code.' }));
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined;
-        const room = rooms.get(code); rememberRoomParticipants(room, user.identity); room.clients.add(socket);
-        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history })); broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
+        const room = rooms.get(code); rememberRoomParticipants(room, user.identity);
+        const peers = [...room.clients].filter(client => client.joined).map(client => ({ peerId: client.videoPeerId, identity: client.joined.identity, name: client.joined.name, videoActive: Boolean(client.videoActive) }));
+        room.clients.add(socket);
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history, videoPeerId: socket.videoPeerId, videoPeers: peers }));
+        for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: 'roomPeerJoined', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name, videoActive: false }));
+        broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
       } else {
         const roomName = String(data.roomName || '').trim().slice(0, 32);
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
         let code; do { code = randomInt(0, 1_000_000).toString().padStart(6, '0'); } while (rooms.has(code));
         rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map() });
-        joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined; const room = rooms.get(code); room.clients.add(socket);
-        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [] })); broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
+        joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined; const room = rooms.get(code);
+        const peers = [...room.clients].filter(client => client.joined).map(client => ({ peerId: client.videoPeerId, identity: client.joined.identity, name: client.joined.name, videoActive: Boolean(client.videoActive) }));
+        room.clients.add(socket);
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [], videoPeerId: socket.videoPeerId, videoPeers: peers }));
+        for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: 'roomPeerJoined', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name, videoActive: false }));
+        broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
       }
     } else if (data.type === 'dmInbox' && !joined) {
       const user = getUser(data.identity);
@@ -327,6 +336,18 @@ wss.on('connection', (socket) => {
         const viewer = client.joined?.identity || client.directIdentity || client.inboxIdentity;
         if (viewer === fromIdentity || viewer === toIdentity) client.send(JSON.stringify({ type: 'whisper', withIdentity: viewer === fromIdentity ? toIdentity : fromIdentity, message }));
       }
+    } else if (data.type === 'videoState' && joined) {
+      const room = rooms.get(joined.code); if (!room) return;
+      const active = Boolean(data.active); if (active === Boolean(socket.videoActive)) return;
+      socket.videoActive = active;
+      for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: active ? 'videoPeerUp' : 'videoPeerDown', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name }));
+    } else if (data.type === 'videoSignal' && joined) {
+      const room = rooms.get(joined.code), targetPeerId = String(data.toPeerId || ''), signal = data.signal;
+      if (!room || !/^[a-f0-9-]{36}$/i.test(targetPeerId) || !signal || !['description', 'candidate'].includes(signal.kind)) return;
+      let signalSize; try { signalSize = JSON.stringify(signal).length; } catch { return; }
+      if (signalSize > 50_000) return;
+      const target = [...room.clients].find(client => client.videoPeerId === targetPeerId && client.joined && client !== socket);
+      if (target?.readyState === 1) target.send(JSON.stringify({ type: 'videoSignal', fromPeerId: socket.videoPeerId, identity: joined.identity, name: joined.name, signal }));
     } else if (data.type === 'message' && joined) {
       const text = String(data.text || '').trim().slice(0, 1000); if (!text) return;
       const room = rooms.get(joined.code); if (!room) return;
@@ -363,6 +384,6 @@ wss.on('connection', (socket) => {
       broadcast(room, { type: 'readReceipt', messageId: message.id, count: readers.size });
     }
   });
-  socket.on('close', () => { if (joined) { const room = rooms.get(joined.code); if (room) { room.clients.delete(socket); room.typing.delete(joined.identity); broadcast(room, { type: 'typing', users: [...room.typing.values()] }); broadcast(room, { type: 'notice', text: joined.name + ' hat den Raum verlassen.' }); } } });
+  socket.on('close', () => { if (joined) { const room = rooms.get(joined.code); if (room) { if (socket.videoActive) for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: 'videoPeerDown', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name })); room.clients.delete(socket); room.typing.delete(joined.identity); for (const client of room.clients) if (client.readyState === 1) client.send(JSON.stringify({ type: 'roomPeerLeft', peerId: socket.videoPeerId })); broadcast(room, { type: 'typing', users: [...room.typing.values()] }); broadcast(room, { type: 'notice', text: joined.name + ' hat den Raum verlassen.' }); } } });
 });
 server.listen(PORT, '0.0.0.0', () => console.log('PWG Chatroom läuft auf Port ' + PORT));

@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null, pendingReply = null;
+const home = $('home'), chat = $('chat'), chatWorkspace = $('chatWorkspace'), nameInput = $('name'), roomNameInput = $('roomNameInput'), codeInput = $('code'), error = $('error');let socket, whisperSocket, myName = '', roomCode = '', myProfile = null, typingActive = false, typingTimer, activeWhisper = null, pendingReply = null, selfVideoPeerId = '', localCameraStream = null, localCameraTile = null;const videoPeers = new Map();
 const homeworkCatalog = [
   ['englisch-sude', 'Englisch', 'Frau Sude'], ['mathe-funk', 'Mathe', 'Frau Funk'], ['kunst-wenzler', 'Kunst', 'Frau Wenzler'], ['sport-debus', 'Sport', 'Herr Debus'],
   ['englisch-adler', 'Englisch', 'Frau Adler'], ['mathe-schindler', 'Mathe', 'Herr Schindler'], ['kunst-sapcanovic', 'Kunst', 'Frau Sapcanovic'], ['sport-halve', 'Sport', 'Herr Halve'],
@@ -420,7 +420,12 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } roomCode = data.code; $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
+    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } resetRoomVideo(); roomCode = data.code; selfVideoPeerId = data.videoPeerId || ''; (data.videoPeers || []).forEach(addRoomVideoPeer); $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
+    if (data.type === 'roomPeerJoined') addRoomVideoPeer(data);
+    if (data.type === 'videoPeerUp') { if (!videoPeers.has(data.peerId)) addRoomVideoPeer({ ...data, videoActive: true }); setRoomPeerCamera(data.peerId, true, data.name); }
+    if (data.type === 'videoPeerDown') setRoomPeerCamera(data.peerId, false, data.name);
+    if (data.type === 'videoSignal') handleVideoSignal(data).catch(err => console.warn('Kamera-Signal fehlgeschlagen.', err));
+    if (data.type === 'roomPeerLeft') removeRoomVideoPeer(data.peerId);
     if (data.type === 'message' || data.type === 'image') renderMessage(data);
     if (data.type === 'avatarUpdate') document.querySelectorAll('.bubble[data-identity="' + CSS.escape(data.identity) + '"] .sender-avatar').forEach(element => updateAvatarElement(element, data.avatar, data.name));
     handleWhisperData(data);
@@ -428,10 +433,149 @@ function connect(action) {
     if (data.type === 'typing') renderTyping(data.users);
     if (data.type === 'readReceipt') updateReadReceipt(data.messageId, data.count);
   });
-  socket.addEventListener('close', () => updateConnection(false));
+  socket.addEventListener('close', () => { updateConnection(false); resetRoomVideo(); });
   socket.addEventListener('error', () => { error.textContent = 'Verbindung fehlgeschlagen. Läuft der Chatserver?'; updateConnection(false); });
 }
 function updateConnection(ok) { $('connection').classList.toggle('offline', !ok); $('connection').innerHTML = '<i></i> ' + (ok ? 'verbunden' : 'Verbindung getrennt'); }
+function showCameraEmpty() {
+  if ($('cameraTiles').children.length) return;
+  const empty = document.createElement('p'); empty.id = 'cameraPanelEmpty'; empty.className = 'camera-panel-empty'; empty.textContent = 'Noch ist keine Kamera im Raum aktiv.'; $('cameraTiles').append(empty);
+}
+function makeCameraTile(peerId, name, local = false) {
+  $('cameraPanelEmpty')?.remove();
+  const tile = document.createElement('div'); tile.className = 'camera-tile' + (local ? ' local' : ' waiting'); tile.dataset.videoPeerId = peerId;
+  const video = document.createElement('video'); video.autoplay = true; video.playsInline = true; video.muted = true; video.setAttribute('aria-label', local ? 'Dein Kamerabild' : 'Kamerabild von ' + name);
+  const label = document.createElement('span'); label.className = 'camera-tile-label'; label.textContent = local ? myName + ' (du)' : name;
+  tile.append(video, label); $('cameraTiles').append(tile); return { tile, video, label };
+}
+function ensureRemoteCameraTile(peer) {
+  if (!peer.tile) peer.tile = makeCameraTile(peer.peerId, peer.name);
+  else peer.tile.label.textContent = peer.name;
+  return peer.tile;
+}
+function sendVideoSignal(peer, signal) {
+  if (socket?.readyState === WebSocket.OPEN && roomCode) socket.send(JSON.stringify({ type: 'videoSignal', toPeerId: peer.peerId, signal }));
+}
+async function negotiateVideoPeer(peer, pc) {
+  if (peer.makingOffer || pc.signalingState === 'closed') return;
+  try {
+    peer.makingOffer = true; await pc.setLocalDescription();
+    sendVideoSignal(peer, { kind: 'description', description: pc.localDescription.toJSON() });
+  } catch (err) { console.warn('Kamera-Verbindung konnte nicht ausgehandelt werden.', err); }
+  finally { peer.makingOffer = false; }
+}
+async function ensureVideoConnection(peer) {
+  if (peer.pc && peer.pc.signalingState !== 'closed') {
+    if (peer.connecting) await peer.connecting;
+    if (localCameraStream && peer.transceiver?.sender.track !== localCameraStream.getVideoTracks()[0]) {
+      await peer.transceiver.sender.replaceTrack(localCameraStream.getVideoTracks()[0]); peer.transceiver.direction = 'sendrecv';
+    }
+    return peer;
+  }
+  if (peer.connecting) return peer.connecting;
+  peer.connecting = (async () => {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    peer.pc = pc; peer.ready = false; peer.polite = selfVideoPeerId.localeCompare(peer.peerId) > 0;
+    peer.candidateQueue = [];
+    const transceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.onicecandidate = event => { if (event.candidate) sendVideoSignal(peer, { kind: 'candidate', candidate: event.candidate.toJSON() }); };
+    pc.ontrack = event => {
+      const tile = ensureRemoteCameraTile(peer); tile.tile.classList.remove('waiting');
+      tile.video.srcObject = event.streams[0] || new MediaStream([event.track]); tile.video.play().catch(() => {});
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') $('cameraStatus').textContent = 'Die Videoverbindung zu ' + peer.name + ' konnte nicht aufgebaut werden.';
+      else if (pc.connectionState === 'connected' && localCameraStream) $('cameraStatus').textContent = 'Deine Kamera wird im Raum geteilt. Mikrofon aus.';
+    };
+    pc.onnegotiationneeded = () => { if (peer.ready && localCameraStream) negotiateVideoPeer(peer, pc); };
+    peer.transceiver = transceiver;
+    if (localCameraStream) { await transceiver.sender.replaceTrack(localCameraStream.getVideoTracks()[0]); transceiver.direction = 'sendrecv'; }
+    peer.ready = true;
+    return peer;
+  })();
+  try { await peer.connecting; } finally { peer.connecting = null; }
+  return peer;
+}
+async function handleVideoSignal(data) {
+  if (!data.fromPeerId || data.fromPeerId === selfVideoPeerId) return;
+  let peer = videoPeers.get(data.fromPeerId);
+  if (!peer) { peer = { peerId: data.fromPeerId, identity: data.identity, name: data.name || 'Freund', videoActive: true, pc: null, tile: null }; videoPeers.set(peer.peerId, peer); }
+  if (data.name) peer.name = data.name;
+  peer.videoActive = true; ensureRemoteCameraTile(peer);
+  await ensureVideoConnection(peer);
+  const pc = peer.pc, signal = data.signal;
+  try {
+    if (signal?.kind === 'candidate' && signal.candidate) {
+      if (peer.ignoreOffer) return;
+      if (!pc.remoteDescription) peer.candidateQueue.push(signal.candidate);
+      else await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+      return;
+    }
+    const description = signal?.description;
+    if (signal?.kind !== 'description' || !description || !['offer', 'answer'].includes(description.type)) return;
+    const readyForOffer = !peer.makingOffer && (pc.signalingState === 'stable' || peer.settingRemoteAnswerPending);
+    const offerCollision = description.type === 'offer' && !readyForOffer;
+    peer.ignoreOffer = !peer.polite && offerCollision;
+    if (peer.ignoreOffer) return;
+    if (offerCollision && peer.polite) await pc.setLocalDescription({ type: 'rollback' });
+    peer.settingRemoteAnswerPending = description.type === 'answer';
+    await pc.setRemoteDescription(description); peer.settingRemoteAnswerPending = false;
+    while (peer.candidateQueue.length) await pc.addIceCandidate(new RTCIceCandidate(peer.candidateQueue.shift()));
+    if (description.type === 'offer') { await pc.setLocalDescription(); sendVideoSignal(peer, { kind: 'description', description: pc.localDescription.toJSON() }); }
+  } catch (err) { if (!peer.ignoreOffer) console.warn('Kamera-Signal konnte nicht verarbeitet werden.', err); }
+}
+function addRoomVideoPeer(info) {
+  if (!info?.peerId || info.peerId === selfVideoPeerId) return;
+  const peer = videoPeers.get(info.peerId) || { peerId: info.peerId, pc: null, tile: null };
+  Object.assign(peer, info); videoPeers.set(peer.peerId, peer);
+  if (peer.videoActive) { ensureRemoteCameraTile(peer); ensureVideoConnection(peer).catch(() => {}); }
+  else if (localCameraStream) ensureVideoConnection(peer).catch(() => {});
+}
+function setRoomPeerCamera(peerId, active, name) {
+  const peer = videoPeers.get(peerId);
+  if (!peer) return;
+  if (name) peer.name = name;
+  peer.videoActive = active;
+  if (active) { ensureRemoteCameraTile(peer); ensureVideoConnection(peer).catch(() => {}); }
+  else {
+    peer.tile?.tile.remove(); peer.tile = null;
+    if (!localCameraStream && peer.pc) { peer.pc.close(); peer.pc = null; peer.connecting = null; peer.ready = false; }
+    showCameraEmpty();
+  }
+}
+function removeRoomVideoPeer(peerId) {
+  const peer = videoPeers.get(peerId); if (!peer) return;
+  peer.pc?.close(); peer.tile?.tile.remove(); videoPeers.delete(peerId); showCameraEmpty();
+}
+async function startRoomCamera() {
+  if (!roomCode || socket?.readyState !== WebSocket.OPEN) { $('cameraStatus').textContent = 'Tritt zuerst einem Raum bei.'; return; }
+  if (!navigator.mediaDevices?.getUserMedia) { $('cameraStatus').textContent = 'Die Kamera ist in diesem Browser nicht verfügbar.'; return; }
+  const button = $('cameraButton'); button.disabled = true; $('cameraStatus').textContent = 'Kamera wird gestartet …';
+  try {
+    localCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    localCameraTile = makeCameraTile(selfVideoPeerId, myName, true); localCameraTile.video.srcObject = localCameraStream; localCameraTile.video.play().catch(() => {});
+    button.textContent = 'Kamera stoppen'; button.classList.add('is-active');
+    $('cameraStatus').textContent = 'Deine Kamera wird im Raum geteilt. Mikrofon aus.';
+    socket.send(JSON.stringify({ type: 'videoState', active: true }));
+    for (const peer of videoPeers.values()) ensureVideoConnection(peer).catch(() => {});
+  } catch (err) {
+    localCameraStream?.getTracks().forEach(track => track.stop()); localCameraStream = null;
+    $('cameraStatus').textContent = err.name === 'NotAllowedError' ? 'Bitte erlaube den Kamerazugriff in deinem Browser.' : 'Die Kamera konnte nicht gestartet werden.';
+  } finally { button.disabled = false; }
+}
+function stopRoomCamera(notify = true) {
+  if (notify && socket?.readyState === WebSocket.OPEN && localCameraStream) socket.send(JSON.stringify({ type: 'videoState', active: false }));
+  localCameraStream?.getTracks().forEach(track => track.stop()); localCameraStream = null;
+  localCameraTile?.tile.remove(); localCameraTile = null;
+  for (const peer of videoPeers.values()) if (peer.transceiver?.sender) peer.transceiver.sender.replaceTrack(null).catch(() => {});
+  $('cameraButton').textContent = 'Kamera starten'; $('cameraButton').classList.remove('is-active');
+  $('cameraStatus').textContent = 'Dein Mikrofon bleibt aus.'; showCameraEmpty();
+}
+function resetRoomVideo() {
+  stopRoomCamera(false); for (const peer of videoPeers.values()) { peer.pc?.close(); peer.tile?.tile.remove(); }
+  videoPeers.clear(); selfVideoPeerId = ''; $('cameraTiles').replaceChildren(); showCameraEmpty();
+}
+showCameraEmpty();
 function renderNotice(text) { const item = document.createElement('div'); item.className = 'notice'; item.textContent = text; $('messages').append(item); scrollDown(); }
 function messagePreview(message) { return message.type === 'image' ? '📷 Bild' : String(message.text || '').slice(0, 180); }
 function setReplyTarget(message) {
@@ -552,8 +696,9 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { if (activeWhisper) closeWhisper(); clearReplyTarget(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
+function leaveRoom() { if (activeWhisper) closeWhisper(); clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
 $('create').addEventListener('click', () => connect('create'));
+$('cameraButton').addEventListener('click', () => localCameraStream ? stopRoomCamera(true) : startRoomCamera());
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
 codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6); error.textContent = ''; });
 roomNameInput.addEventListener('input', () => error.textContent = '');$('message').addEventListener('input', () => { if ($('message').value.trim()) updateTyping(); else stopTyping(); });
