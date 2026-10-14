@@ -454,17 +454,16 @@ function setRoomMedia(media) {
     src = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id) + '?autoplay=0&controls=1'; externalUrl = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id);
   } else { $('roomMediaStatus').textContent = 'Dieser Videolink konnte nicht angezeigt werden.'; return; }
   const frame = document.createElement('iframe'); frame.src = src; frame.title = media.platform === 'twitch' ? 'Twitch Livevideo' : 'TikTok-Video'; frame.allow = 'autoplay; fullscreen; picture-in-picture; encrypted-media'; frame.allowFullscreen = true; frame.referrerPolicy = 'strict-origin-when-cross-origin'; player.append(frame);
-  external.href = externalUrl; external.classList.remove('hidden'); $('roomMediaStatus').textContent = 'Video geteilt' + (media.byName ? ' von ' + media.byName : '') + '. Die Wiedergabe steuerst du selbst.'; $('roomMediaDetails').open = true;
+  external.href = externalUrl; external.classList.remove('hidden'); $('roomMediaStatus').textContent = 'Das Video wird nur dir auf diesem Gerät angezeigt.'; $('roomMediaDetails').open = true;
 }
 function shareRoomMedia(event) {
   event.preventDefault();
-  if (socket?.readyState !== WebSocket.OPEN || !roomCode) { $('roomMediaStatus').textContent = 'Warte, bis du mit dem Raum verbunden bist.'; return; }
   const media = getRoomMedia($('roomMediaPlatform').value, $('roomMediaInput').value);
   if (!media) { $('roomMediaStatus').textContent = $('roomMediaPlatform').value === 'twitch' ? 'Gib einen gültigen Twitch-Kanalnamen ein.' : 'Füge einen vollständigen TikTok-Link zu einem Video ein.'; return; }
-  $('roomMediaStatus').textContent = 'Video wird mit dem Raum geteilt …'; socket.send(JSON.stringify({ type: 'roomMediaSet', platform: media.platform, value: $('roomMediaInput').value.trim() }));
+  setRoomMedia(media);
 }
 $('roomMediaForm').addEventListener('submit', shareRoomMedia);
-$('roomMediaClear').addEventListener('click', () => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'roomMediaClear' })); });
+$('roomMediaClear').addEventListener('click', () => setRoomMedia(null));
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
@@ -479,9 +478,7 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } resetRoomVideo(); roomCode = data.code; selfVideoPeerId = data.videoPeerId || ''; (data.videoPeers || []).forEach(addRoomVideoPeer); $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); setRoomMedia(data.roomMedia); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
-    if (data.type === 'roomMedia') setRoomMedia(data.media);
-    if (data.type === 'roomMediaError') $('roomMediaStatus').textContent = data.message;
+    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } resetRoomVideo(); setRoomMedia(null); roomCode = data.code; selfVideoPeerId = data.videoPeerId || ''; (data.videoPeers || []).forEach(addRoomVideoPeer); $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
     if (data.type === 'roomPeerJoined') addRoomVideoPeer(data);
     if (data.type === 'videoPeerUp') { if (!videoPeers.has(data.peerId)) addRoomVideoPeer({ ...data, videoActive: true }); setRoomPeerCamera(data.peerId, true, data.name); }
     if (data.type === 'videoPeerDown') setRoomPeerCamera(data.peerId, false, data.name);

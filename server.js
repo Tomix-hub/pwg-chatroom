@@ -80,32 +80,6 @@ function addToHistory(room, message) {
   while (room.history.length > 100 || room.historyBytes > 2 * 1024 * 1024) { const removed = room.history.shift(); room.historyBytes -= JSON.stringify(removed).length; }
 }
 function whisperKey(a, b) { return [a, b].sort().join(':'); }
-function normalizeRoomMedia(platformValue, inputValue) {
-  const platform = String(platformValue || ''), input = String(inputValue || '').trim();
-  if (platform === 'twitch') {
-    let channel = input;
-    if (/^https:\/\//i.test(input)) {
-      try { const url = new URL(input); if (!['twitch.tv', 'www.twitch.tv'].includes(url.hostname.toLowerCase())) return null; channel = url.pathname.split('/').filter(Boolean)[0] || ''; }
-      catch { return null; }
-    }
-    if (!/^[a-z0-9_]{1,25}$/i.test(channel) || ['videos', 'directory', 'downloads', 'p', 'search'].includes(channel.toLowerCase())) return null;
-    channel = channel.toLowerCase(); return { platform, id: channel, url: 'https://www.twitch.tv/' + channel };
-  }
-  if (platform === 'tiktok') {
-    let videoId = input, url = '';
-    if (/^https:\/\//i.test(input)) {
-      try {
-        const parsed = new URL(input), host = parsed.hostname.toLowerCase();
-        if (host !== 'tiktok.com' && !host.endsWith('.tiktok.com')) return null;
-        const match = parsed.pathname.match(/(?:\/video\/|\/player\/v1\/)(\d{10,25})/); if (!match) return null;
-        videoId = match[1]; url = 'https://www.tiktok.com' + parsed.pathname;
-      } catch { return null; }
-    }
-    if (!/^\d{10,25}$/.test(videoId)) return null;
-    return { platform, id: videoId, url: url || 'https://www.tiktok.com/player/v1/' + videoId };
-  }
-  return null;
-}
 function rememberContact(identity, contactIdentity) {
   if (identity === contactIdentity) return false;
   const user = getUser(identity); if (!user) return false;
@@ -322,18 +296,18 @@ wss.on('connection', (socket) => {
         const room = rooms.get(code); rememberRoomParticipants(room, user.identity);
         const peers = [...room.clients].filter(client => client.joined).map(client => ({ peerId: client.videoPeerId, identity: client.joined.identity, name: client.joined.name, videoActive: Boolean(client.videoActive) }));
         room.clients.add(socket);
-        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history, roomMedia: room.media || null, videoPeerId: socket.videoPeerId, videoPeers: peers }));
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: room.history, videoPeerId: socket.videoPeerId, videoPeers: peers }));
         for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: 'roomPeerJoined', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name, videoActive: false }));
         broadcast(room, { type: 'notice', text: name + ' ist dem Raum beigetreten.' });
       } else {
         const roomName = String(data.roomName || '').trim().slice(0, 32);
         if (!roomName) return socket.send(JSON.stringify({ type: 'error', message: 'Bitte gib einen Raumnamen ein.' }));
         let code; do { code = randomInt(0, 1_000_000).toString().padStart(6, '0'); } while (rooms.has(code));
-        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map(), drawBoards: new Map(), media: null });
+        rooms.set(code, { name: roomName, owner: user.identity, clients: new Set(), participants: new Set([user.identity]), history: [], historyBytes: 0, readers: new Map(), typing: new Map(), drawBoards: new Map() });
         joined = { code, identity: user.identity, name, avatar: user.avatar || null }; socket.joined = joined; const room = rooms.get(code);
         const peers = [...room.clients].filter(client => client.joined).map(client => ({ peerId: client.videoPeerId, identity: client.joined.identity, name: client.joined.name, videoActive: Boolean(client.videoActive) }));
         room.clients.add(socket);
-        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [], roomMedia: null, videoPeerId: socket.videoPeerId, videoPeers: peers }));
+        socket.send(JSON.stringify({ type: 'joined', code, roomName: room.name, history: [], videoPeerId: socket.videoPeerId, videoPeers: peers }));
         for (const client of room.clients) if (client !== socket && client.readyState === 1) client.send(JSON.stringify({ type: 'roomPeerJoined', peerId: socket.videoPeerId, identity: joined.identity, name: joined.name, videoActive: false }));
         broadcast(room, { type: 'notice', text: name + ' hat den Raum erstellt.' });
       }
@@ -364,15 +338,6 @@ wss.on('connection', (socket) => {
         const viewer = client.joined?.identity || client.directIdentity || client.inboxIdentity;
         if (viewer === fromIdentity || viewer === toIdentity) client.send(JSON.stringify({ type: 'whisper', withIdentity: viewer === fromIdentity ? toIdentity : fromIdentity, message }));
       }
-    } else if ((data.type === 'roomMediaSet' || data.type === 'roomMediaClear') && joined) {
-      const room = rooms.get(joined.code); if (!room) return;
-      if (data.type === 'roomMediaClear') room.media = null;
-      else {
-        const media = normalizeRoomMedia(data.platform, data.value);
-        if (!media) return socket.send(JSON.stringify({ type: 'roomMediaError', message: 'Bitte gib einen gültigen Twitch-Kanal oder einen vollständigen TikTok-Videolink ein.' }));
-        room.media = { ...media, byName: joined.name };
-      }
-      broadcast(room, { type: 'roomMedia', media: room.media });
     } else if (data.type === 'drawOpen' && joined) {
       const room = rooms.get(joined.code), targetIdentity = String(data.targetIdentity || '');
       if (!room || !/^[a-f0-9-]{36}$/i.test(targetIdentity) || targetIdentity === joined.identity) return;
