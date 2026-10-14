@@ -1,16 +1,18 @@
-const CACHE_NAME = 'pwg-chatroom-shell-v60';
+const CACHE_NAME = 'pwg-chatroom-shell-v61';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/style.css?v=media5',
-  '/app.js?v=media5',
+  '/app.js?v=media6',
   '/manifest.webmanifest',
   '/icon-192.png',
   '/icon-512.png',
   '/pwg-logo.png',
   '/sky-background.png',
   '/icon-512-maskable.png',
-  '/apple-touch-icon.png'
+  '/apple-touch-icon.png',
+  '/vendor/qrcode-generator.js',
+  '/vendor/jsQR.js'
 ];
 
 self.addEventListener('install', event => {

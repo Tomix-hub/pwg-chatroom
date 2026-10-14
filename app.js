@@ -314,6 +314,7 @@ $('setupForm').addEventListener('submit', async event => {
   event.preventDefault(); const input = $('setupName'), output = $('setupError'); output.textContent = '';
   try { const data = await api('/api/register', { method: 'POST', body: JSON.stringify({ identity, name: input.value.trim() }) }); fillProfile(data.profile); $('setupOverlay').classList.add('hidden');
     if (notificationInviteId) await joinRoomFromNotification();
+    else if (/^\d{6}$/.test(codeInput.value.trim())) connect('join');
     else if (hasInviteCode) { codeInput.value = inviteCode; connect('join'); }
     else if (savedRoomSession?.code) { codeInput.value = savedRoomSession.code; connect('join'); }
     askForNotificationsOnce();
@@ -424,7 +425,7 @@ async function compressAvatar(file) {
 $('designButton').addEventListener('click', () => $('designOverlay').classList.remove('hidden'));
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('roomInviteOverlay').classList.add('hidden'); } });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('roomInviteOverlay').classList.add('hidden'); $('roomQrOverlay').classList.add('hidden'); closeQrScanner(); } });
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
@@ -810,6 +811,64 @@ $('copy').addEventListener('click', async () => {
   if (navigator.share) { try { await navigator.share(invite); } catch (err) { if (err.name !== 'AbortError') renderNotice('Der Einladungslink konnte nicht geteilt werden.'); } return; }
   try { await navigator.clipboard.writeText(url.toString()); $('copy').innerHTML = 'Link kopiert ✓'; setTimeout(() => $('copy').innerHTML = 'Airdroppen <span>↗</span>', 1800); }
   catch { window.prompt('Teile diesen Einladungslink:', url.toString()); }
+});
+let qrCameraStream = null, qrScanFrame = 0;
+function scannedRoomCode(value) {
+  const raw = String(value || '').trim();
+  if (/^\d{6}$/.test(raw)) return raw;
+  try { const url = new URL(raw); if (url.hostname !== location.hostname) return ''; const code = (url.searchParams.get('room') || '').replace(/\D/g, ''); return /^\d{6}$/.test(code) ? code : ''; } catch { return ''; }
+}
+function closeQrScanner() {
+  cancelAnimationFrame(qrScanFrame); qrScanFrame = 0;
+  qrCameraStream?.getTracks().forEach(track => track.stop()); qrCameraStream = null;
+  $('qrScanVideo').srcObject = null; $('qrScanOverlay').classList.add('hidden');
+}
+function acceptScannedRoom(value) {
+  const code = scannedRoomCode(value);
+  if (!code) { $('qrScanStatus').textContent = 'Das ist kein gültiger PWG-Raumcode.'; return false; }
+  closeQrScanner(); codeInput.value = code; connect('join'); return true;
+}
+function scanQrFrame() {
+  const video = $('qrScanVideo');
+  if (!qrCameraStream || $('qrScanOverlay').classList.contains('hidden')) return;
+  if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA && window.jsQR) {
+    const canvas = scanQrFrame.canvas || (scanQrFrame.canvas = document.createElement('canvas'));
+    const scale = Math.min(1, 900 / video.videoWidth); canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale);
+    const context = canvas.getContext('2d', { willReadFrequently: true }); context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const result = window.jsQR(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
+    if (result && acceptScannedRoom(result.data)) return;
+  }
+  qrScanFrame = requestAnimationFrame(scanQrFrame);
+}
+async function openQrScanner() {
+  $('qrScanStatus').textContent = 'Kamera wird gestartet …'; $('qrScanOverlay').classList.remove('hidden');
+  if (!navigator.mediaDevices?.getUserMedia) { $('qrScanStatus').textContent = 'Kamerazugriff ist nicht verfügbar. Wähle stattdessen ein Foto mit QR-Code aus.'; return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    if ($('qrScanOverlay').classList.contains('hidden')) { stream.getTracks().forEach(track => track.stop()); return; }
+    qrCameraStream = stream;
+    $('qrScanVideo').srcObject = qrCameraStream; await $('qrScanVideo').play(); $('qrScanStatus').textContent = 'Halte den QR-Code vor die Kamera.'; scanQrFrame();
+  } catch { $('qrScanStatus').textContent = 'Kamerazugriff nicht möglich. Erlaube ihn im Browser oder wähle ein Foto des QR-Codes aus.'; }
+}
+function showRoomQr() {
+  const url = new URL(location.href); url.search = ''; url.searchParams.set('room', roomCode); url.hash = '';
+  $('qrRoomCode').textContent = roomCode; $('roomQrOverlay').classList.remove('hidden');
+  if (typeof window.qrcode === 'function') { const qr = window.qrcode(0, 'H'); qr.addData(url.toString()); qr.make(); $('roomQrImage').src = qr.createDataURL(8, 4); }
+}
+$('showRoomQr').addEventListener('click', showRoomQr);
+$('closeRoomQr').addEventListener('click', () => $('roomQrOverlay').classList.add('hidden'));
+$('roomQrOverlay').addEventListener('click', event => { if (event.target === $('roomQrOverlay')) $('roomQrOverlay').classList.add('hidden'); });
+$('scanQr').addEventListener('click', openQrScanner);
+$('closeQrScan').addEventListener('click', closeQrScanner);
+$('qrScanOverlay').addEventListener('click', event => { if (event.target === $('qrScanOverlay')) closeQrScanner(); });
+$('qrScanPhoto').addEventListener('click', () => $('qrScanFile').click());
+$('qrScanFile').addEventListener('change', async event => {
+  const file = event.target.files?.[0]; event.target.value = ''; if (!file) return;
+  try {
+    const imageUrl = URL.createObjectURL(file);
+    try { const image = new Image(); image.src = imageUrl; await image.decode(); const canvas = document.createElement('canvas'); const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight)); canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale)); const context = canvas.getContext('2d', { willReadFrequently: true }); context.drawImage(image, 0, 0, canvas.width, canvas.height); const result = window.jsQR?.(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'attemptBoth' }); if (!result || !acceptScannedRoom(result.data)) $('qrScanStatus').textContent = 'Im Foto wurde kein gültiger PWG-Raum-QR-Code gefunden.'; }
+    finally { URL.revokeObjectURL(imageUrl); }
+  } catch { $('qrScanStatus').textContent = 'Das Foto konnte nicht gelesen werden. Bitte wähle ein anderes Bild.'; }
 });
 $('back').addEventListener('click', leaveRoom); $('leaveRoom').addEventListener('click', leaveRoom);
 if (hasInviteCode) codeInput.value = inviteCode;
