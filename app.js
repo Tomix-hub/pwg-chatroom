@@ -425,56 +425,6 @@ $('designButton').addEventListener('click', () => $('designOverlay').classList.r
 $('closeDesign').addEventListener('click', () => $('designOverlay').classList.add('hidden'));
 $('designOverlay').addEventListener('click', event => { if (event.target === $('designOverlay')) $('designOverlay').classList.add('hidden'); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('profileOverlay').classList.add('hidden'); $('otherProfileOverlay').classList.add('hidden'); $('designOverlay').classList.add('hidden'); $('roomInviteOverlay').classList.add('hidden'); } });
-function getRoomMedia(platform, value) {
-  const input = String(value || '').trim();
-  if (platform === 'twitch') {
-    let channel = input;
-    if (/^https:\/\//i.test(input)) { try { const url = new URL(input); if (!['twitch.tv', 'www.twitch.tv'].includes(url.hostname.toLowerCase())) return null; channel = url.pathname.split('/').filter(Boolean)[0] || ''; } catch { return null; } }
-    if (!/^[a-z0-9_]{1,25}$/i.test(channel) || ['videos', 'directory', 'downloads', 'p', 'search'].includes(channel.toLowerCase())) return null;
-    channel = channel.toLowerCase(); return { platform, id: channel, url: 'https://www.twitch.tv/' + channel };
-  }
-  if (platform === 'tiktok') {
-    let id = input, url = '';
-    if (/^https:\/\//i.test(input)) { try { const parsed = new URL(input); if (parsed.hostname.toLowerCase() !== 'tiktok.com' && !parsed.hostname.toLowerCase().endsWith('.tiktok.com')) return null; const match = parsed.pathname.match(/(?:\/video\/|\/player\/v1\/)(\d{10,25})/); if (!match) return null; id = match[1]; url = 'https://www.tiktok.com' + parsed.pathname; } catch { return null; } }
-    if (!/^\d{10,25}$/.test(id)) return null;
-    return { platform, id, url: url || 'https://www.tiktok.com/player/v1/' + id };
-  }
-  return null;
-}
-function setRoomMedia(media) {
-  const player = $('roomMediaPlayer'), external = $('roomMediaExternal'); player.replaceChildren(); external.classList.add('hidden'); external.removeAttribute('href');
-  if (!media || !['twitch', 'tiktok'].includes(media.platform) || typeof media.id !== 'string') {
-    const message = document.createElement('span'); message.textContent = 'Noch kein Video ausgewählt.'; player.append(message);
-    $('roomMediaStatus').textContent = 'Gib deinen Twitch-Kanal oder TikTok-Videolink ein. Deine Auswahl sehen nur du.'; $('roomMediaPanel').classList.remove('is-playing'); return;
-  }
-  let src = '', externalUrl = '';
-  if (media.platform === 'twitch' && /^[a-z0-9_]{1,25}$/i.test(media.id)) {
-    src = 'https://player.twitch.tv/?channel=' + encodeURIComponent(media.id) + '&parent=' + encodeURIComponent(location.hostname) + '&autoplay=false&muted=true'; externalUrl = 'https://www.twitch.tv/' + encodeURIComponent(media.id);
-  } else if (media.platform === 'tiktok' && /^\d{10,25}$/.test(media.id)) {
-    src = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id) + '?autoplay=0&controls=1'; externalUrl = 'https://www.tiktok.com/player/v1/' + encodeURIComponent(media.id);
-  } else { $('roomMediaStatus').textContent = 'Dieser Videolink konnte nicht angezeigt werden.'; return; }
-  const frame = document.createElement('iframe'); frame.src = src; frame.title = media.platform === 'twitch' ? 'Twitch Livevideo' : 'TikTok-Video'; frame.allow = 'autoplay; fullscreen; picture-in-picture; encrypted-media'; frame.allowFullscreen = true; frame.referrerPolicy = 'strict-origin-when-cross-origin'; player.append(frame);
-  external.href = externalUrl; external.classList.remove('hidden'); $('roomMediaStatus').textContent = 'Das Video wird nur dir auf diesem Gerät angezeigt.'; $('roomMediaPanel').classList.remove('hidden'); $('roomMediaPanel').classList.add('is-playing'); chatWorkspace.classList.add('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'true');
-}
-function shareRoomMedia(event) {
-  event.preventDefault();
-  if ($('roomMediaPlatform').value === 'tiktok-fyp') { $('roomMediaStatus').textContent = 'TikTok erlaubt nicht, den persönlichen FYP in PWG Chatroom einzubetten. Einzelne TikTok-Videos kannst du hier im Player ansehen.'; return; }
-  const media = getRoomMedia($('roomMediaPlatform').value, $('roomMediaInput').value);
-  if (!media) { $('roomMediaStatus').textContent = $('roomMediaPlatform').value === 'twitch' ? 'Gib einen gültigen Twitch-Kanalnamen ein.' : 'Füge einen vollständigen TikTok-Link zu einem Video ein.'; return; }
-  setRoomMedia(media);
-}
-$('roomMediaPlatform').addEventListener('change', () => {
-  const isFyp = $('roomMediaPlatform').value === 'tiktok-fyp'; $('roomMediaInput').disabled = isFyp;
-  $('roomMediaInput').placeholder = isFyp ? 'TikTok-FYP wird direkt geöffnet' : 'Twitch-Kanal oder TikTok-Link';
-  $('roomMediaSubmit').textContent = isFyp ? 'Warum?' : 'Ansehen';
-});
-$('roomMediaForm').addEventListener('submit', shareRoomMedia);
-$('roomMediaToggle').addEventListener('click', () => {
-  if ($('roomMediaPanel').classList.contains('hidden')) { $('roomMediaPanel').classList.remove('hidden'); chatWorkspace.classList.add('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'true'); $('roomMediaInput').focus(); }
-  else closeRoomMediaPanel();
-});
-$('roomMediaClose').addEventListener('click', closeRoomMediaPanel);
-function closeRoomMediaPanel() { setRoomMedia(null); $('roomMediaPanel').classList.add('hidden'); chatWorkspace.classList.remove('has-room-media'); $('roomMediaToggle').setAttribute('aria-expanded', 'false'); }
 function connect(action) {
   if (!myProfile) { $('setupOverlay').classList.remove('hidden'); return; }
   error.textContent = ''; myName = myProfile.name;
@@ -489,7 +439,7 @@ function connect(action) {
     const data = JSON.parse(event.data);
     if (data.type === 'error') { error.textContent = data.message; if (savedRoomSession?.code === roomCode) clearRoomSession(); socket.close(); return; }
     if (data.type === 'imageError') { renderNotice(data.message); return; }
-    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } resetRoomVideo(); setRoomMedia(null); roomCode = data.code; selfVideoPeerId = data.videoPeerId || ''; (data.videoPeers || []).forEach(addRoomVideoPeer); $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
+    if (data.type === 'joined') { closeWhisperInbox(); if (activeWhisper) { activeWhisper = null; chatWorkspace.classList.remove('whisper-only', 'has-whisper'); $('privateChat').classList.add('hidden'); } resetRoomVideo(); roomCode = data.code; selfVideoPeerId = data.videoPeerId || ''; (data.videoPeers || []).forEach(addRoomVideoPeer); $('roomCode').textContent = roomCode; $('roomTitle').textContent = data.roomName || 'Euer Raum'; home.classList.add('hidden'); chat.classList.remove('hidden'); chatWorkspace.classList.remove('hidden'); $('messages').innerHTML = ''; data.history.forEach(renderMessage); saveRoomSession(); updateConnection(true); loadRoomContacts(); }
     if (data.type === 'roomPeerJoined') addRoomVideoPeer(data);
     if (data.type === 'videoPeerUp') { if (!videoPeers.has(data.peerId)) addRoomVideoPeer({ ...data, videoActive: true }); setRoomPeerCamera(data.peerId, true, data.name); }
     if (data.type === 'videoPeerDown') setRoomPeerCamera(data.peerId, false, data.name);
@@ -819,7 +769,7 @@ function stopTyping() { clearTimeout(typingTimer); if (typingActive && socket?.r
 function scrollDown() { $('messages').scrollTop = $('messages').scrollHeight; }
 function saveRoomSession() { localStorage.setItem('pwgChatSession', JSON.stringify({ identity, code: roomCode })); }
 function clearRoomSession() { localStorage.removeItem('pwgChatSession'); }
-function leaveRoom() { if (activeWhisper) closeWhisper(); $('drawOverlay').classList.add('hidden'); activeDrawing = null; $('drawCanvas')._lastPoint = null; clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); closeRoomMediaPanel(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
+function leaveRoom() { if (activeWhisper) closeWhisper(); $('drawOverlay').classList.add('hidden'); activeDrawing = null; $('drawCanvas')._lastPoint = null; clearReplyTarget(); stopRoomCamera(true); resetRoomVideo(); clearRoomSession(); if (socket) socket.close(); chatWorkspace.classList.add('hidden'); home.classList.remove('hidden'); error.textContent = ''; roomCode = ''; $('messages').innerHTML = '<div class="empty"><span>✳</span><strong>Hier beginnt euer Gespräch.</strong><small>Schickt die erste Nachricht oder teilt den Raumcode.</small></div>'; loadRoomContacts(); connectWhisperInbox(); }
 $('create').addEventListener('click', () => connect('create'));
 $('cameraButton').addEventListener('click', () => localCameraStream ? stopRoomCamera(true) : startRoomCamera());
 $('join').addEventListener('click', () => { if (codeInput.value.trim().length !== 6) { error.textContent = 'Ein Raumcode besteht aus 6 Ziffern.'; codeInput.focus(); return; } connect('join'); });
